@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from datetime import datetime
 
@@ -8,8 +9,12 @@ from google_auth import router as google_auth_router
 from google_calendar import router as google_calendar_router
 from google_gmail import router as google_gmail_router
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+from dotenv import load_dotenv
 
 # ==============================
+load_dotenv()
+
 # FastAPI Configuration
 # ==============================
 
@@ -19,12 +24,20 @@ app = FastAPI(
     version="1.0.0"
 )
 
+FRONTEND_URL = os.getenv(
+    "FRONTEND_URL",
+    "http://localhost:5173"
+).rstrip("/")
+
+ALLOWED_ORIGINS = list({
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    FRONTEND_URL,
+})
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,6 +46,24 @@ app.add_middleware(
 app.include_router(google_auth_router)
 app.include_router(google_calendar_router)
 app.include_router(google_gmail_router)
+
+
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
+if not SESSION_SECRET_KEY:
+    raise RuntimeError("SESSION_SECRET_KEY is missing from backend/.env")
+
+SESSION_COOKIE_SECURE = (
+    os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
+)
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY,
+    session_cookie="ai_email_session",
+    max_age=60 * 60 * 24 * 7,
+    same_site="none" if SESSION_COOKIE_SECURE else "lax",
+    https_only=SESSION_COOKIE_SECURE,
+)
 
 # ==============================
 # Ollama Configuration

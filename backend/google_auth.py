@@ -2,7 +2,6 @@
 import os
 from pathlib import Path
 
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Request
@@ -11,6 +10,15 @@ from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 
 load_dotenv()
+
+GOOGLE_REDIRECT_URI_ENV = os.getenv("GOOGLE_REDIRECT_URI", "")
+
+if GOOGLE_REDIRECT_URI_ENV.startswith(
+    ("http://localhost", "http://127.0.0.1")
+):
+    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+else:
+    os.environ.pop("OAUTHLIB_INSECURE_TRANSPORT", None)
 
 router = APIRouter()
 
@@ -26,6 +34,10 @@ SCOPES = [
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+FRONTEND_URL = os.getenv(
+    "FRONTEND_URL",
+    "http://localhost:5173"
+).rstrip("/")
 
 # Store the original OAuth Flow, including its PKCE verifier
 oauth_flows = {}
@@ -107,8 +119,10 @@ def google_callback(request: Request, state: str):
         with open(TOKEN_FILE, "w") as token:
             token.write(credentials.to_json())
 
+        request.session["authenticated"] = True
+
         return RedirectResponse(
-            url="http://localhost:5173/calendar?google_connected=true"
+            url=f"{FRONTEND_URL}/calendar?google_connected=true"
         )
 
     except Exception as error:
@@ -162,8 +176,21 @@ def get_google_credentials():
 
 
 @router.get("/auth/google/status")
-def google_status():
-
+def google_status(request: Request):
     return {
-        "connected": TOKEN_FILE.exists()
+        "connected": bool(request.session.get("authenticated"))
     }
+
+
+def require_authenticated_session(request: Request):
+    if not request.session.get("authenticated"):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please connect your Google account."
+        )
+
+
+@router.post("/auth/google/logout")
+def google_logout(request: Request):
+    request.session.clear()
+    return {"message": "Logged out successfully"}

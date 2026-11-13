@@ -1,12 +1,12 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from google_auth import get_google_credentials
+from google_auth import get_google_credentials, require_authenticated_session
 
 router = APIRouter()
 
@@ -36,7 +36,7 @@ class UpdateEventRequest(BaseModel):
     end_datetime: datetime | None = None
     timezone: str | None = "Asia/Dhaka"
 
-@router.get("/google-calendar/events")
+@router.get("/google-calendar/events", dependencies=[Depends(require_authenticated_session)])
 def get_calendar_events(
     max_results: int = Query(default=10, ge=1, le=100)
 ):
@@ -67,7 +67,7 @@ def get_calendar_events(
         )
 
 
-@router.post("/google-calendar/create-event")
+@router.post("/google-calendar/create-event", dependencies=[Depends(require_authenticated_session)])
 def create_calendar_event(event: CreateEventRequest):
     try:
         if event.end_datetime <= event.start_datetime:
@@ -113,7 +113,7 @@ def create_calendar_event(event: CreateEventRequest):
         )
 
 
-@router.put("/google-calendar/events/{event_id}")
+@router.put("/google-calendar/events/{event_id}", dependencies=[Depends(require_authenticated_session)])
 def update_calendar_event(
     event_id: str,
     event: UpdateEventRequest
@@ -192,7 +192,7 @@ def update_calendar_event(
         )
 
 
-@router.delete("/google-calendar/events/{event_id}")
+@router.delete("/google-calendar/events/{event_id}", dependencies=[Depends(require_authenticated_session)])
 def delete_calendar_event(event_id: str):
     try:
         service = get_calendar_service()

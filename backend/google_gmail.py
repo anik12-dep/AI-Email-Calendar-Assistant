@@ -3,12 +3,12 @@ import base64
 
 from email.mime.text import MIMEText
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from pydantic import BaseModel
 
-from google_auth import get_google_credentials
+from google_auth import get_google_credentials, require_authenticated_session
 
 router = APIRouter()
 
@@ -44,7 +44,7 @@ def decode_email_body(payload):
     return ""
 
 
-@router.get("/gmail/messages")
+@router.get("/gmail/messages", dependencies=[Depends(require_authenticated_session)])
 def get_gmail_messages(
     max_results: int = Query(default=10, ge=1, le=50),
     category: str = Query(default="inbox")
@@ -130,7 +130,7 @@ class GmailReplyRequest(BaseModel):
     reply_body: str
 
 
-@router.post("/gmail/reply")
+@router.post("/gmail/reply", dependencies=[Depends(require_authenticated_session)])
 def send_gmail_reply(request: GmailReplyRequest):
     try:
         if not request.reply_body.strip():
