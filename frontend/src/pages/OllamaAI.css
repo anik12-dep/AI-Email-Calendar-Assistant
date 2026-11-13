@@ -1,0 +1,694 @@
+/* ================================
+   OLLAMA AI - MAIN PAGE
+================================ */
+
+.ollama-page {
+  min-height: calc(100vh - 70px);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  color: #1e293b;
+  font-family: Inter, Arial, sans-serif;
+}
+
+/* Header */
+
+.ollama-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.ollama-header h1 {
+  font-size: 28px;
+  font-weight: 750;
+  margin: 0 0 8px;
+  color: #172033;
+}
+
+.ollama-header p {
+  color: #64748b;
+  font-size: 14px;
+  margin: 0;
+}
+
+.ollama-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ollama-header-actions select {
+  padding: 11px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: white;
+  color: #334155;
+  outline: none;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ollama-clear-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 15px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: white;
+  color: #64748b;
+  font-size: 13px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.ollama-clear-button:hover {
+  background: #fff1f2;
+  color: #e11d48;
+  border-color: #fecdd3;
+}
+
+.ollama-clear-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Chat Container */
+
+.ollama-chat-container {
+  flex: 1;
+  min-height: 580px;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border: 1px solid #e8edf4;
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 5px 25px rgba(15, 23, 42, 0.04);
+}
+
+.ollama-messages {
+  flex: 1;
+  padding: 30px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+  min-height: 420px;
+}
+
+/* Welcome Screen */
+
+.ollama-empty-state {
+  margin: auto;
+  text-align: center;
+  max-width: 460px;
+  padding: 35px 15px;
+}
+
+.ollama-empty-icon {
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 24px;
+  background: linear-gradient(135deg, #ede9fe, #dbeafe);
+  color: #7c3aed;
+}
+
+.ollama-empty-state h2 {
+  font-size: 25px;
+  color: #172033;
+  margin: 0 0 12px;
+}
+
+.ollama-empty-state p {
+  color: #94a3b8;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* Messages */
+
+.ollama-message {
+  display: flex;
+  gap: 14px;
+  max-width: 850px;
+  width: 100%;
+  margin: 0 auto;
+  align-items: flex-start;
+}
+
+.ollama-message-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.ollama-message.user .ollama-message-icon {
+  background: #e0e7ff;
+  color: #4f46e5;
+}
+
+.ollama-message.assistant .ollama-message-icon {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+
+.ollama-message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.ollama-message-content strong {
+  display: block;
+  font-size: 13px;
+  color: #334155;
+  margin: 4px 0 9px;
+}
+
+.ollama-message-content p {
+  margin: 0;
+  color: #475569;
+  font-size: 14px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Loading */
+
+.ollama-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #7c3aed;
+  font-size: 13px;
+  padding: 15px;
+}
+
+.ollama-spinner {
+  animation: ollama-spin 1s linear infinite;
+}
+
+@keyframes ollama-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Error */
+
+.ollama-error {
+  margin: 0 25px 12px;
+  padding: 12px 15px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 10px;
+  color: #be123c;
+  font-size: 13px;
+}
+
+/* Input Area */
+
+.ollama-input-area {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 0 25px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 15px;
+  background: #f8fafc;
+  transition: 0.2s;
+}
+
+.ollama-input-area:focus-within {
+  border-color: #a78bfa;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.09);
+}
+
+.ollama-input-area textarea {
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #334155;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 7px 4px;
+  min-width: 0;
+}
+
+.ollama-input-area textarea::placeholder {
+  color: #94a3b8;
+}
+
+.ollama-input-area button {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border: none;
+  border-radius: 12px;
+  background: #7c3aed;
+  color: white;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.ollama-input-area button:hover:not(:disabled) {
+  background: #6d28d9;
+  transform: translateY(-2px);
+}
+
+.ollama-input-area button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ollama-disclaimer {
+  text-align: center;
+  font-size: 11px;
+  color: #94a3b8;
+  padding: 13px 10px 17px;
+  margin: 0;
+}
+
+/* ================================
+   DARK MODE
+================================ */
+
+.dark-mode .ollama-page {
+  color: #e2e8f0;
+}
+
+.dark-mode .ollama-header h1,
+.dark-mode .ollama-empty-state h2 {
+  color: #f1f5f9;
+}
+
+.dark-mode .ollama-header p {
+  color: #94a3b8;
+}
+
+.dark-mode .ollama-chat-container {
+  background: #1e293b;
+  border-color: #334155;
+  box-shadow: none;
+}
+
+.dark-mode .ollama-header-actions select,
+.dark-mode .ollama-clear-button {
+  background: #1e293b;
+  color: #e2e8f0;
+  border-color: #475569;
+}
+
+.dark-mode .ollama-clear-button:hover {
+  background: #3b2635;
+}
+
+.dark-mode .ollama-message-content strong {
+  color: #e2e8f0;
+}
+
+.dark-mode .ollama-message-content p {
+  color: #cbd5e1;
+}
+
+.dark-mode .ollama-input-area {
+  background: #0f172a;
+  border-color: #475569;
+}
+
+.dark-mode .ollama-input-area textarea {
+  color: #f1f5f9;
+}
+
+.dark-mode .ollama-empty-icon {
+  background: #312e81;
+  color: #c4b5fd;
+}
+
+/* Responsive */
+
+@media (max-width: 768px) {
+  .ollama-page {
+    gap: 18px;
+  }
+
+  .ollama-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ollama-header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .ollama-header h1 {
+    font-size: 23px;
+  }
+
+  .ollama-chat-container {
+    min-height: 500px;
+  }
+
+  .ollama-messages {
+    padding: 20px 14px;
+  }
+
+  .ollama-input-area {
+    margin: 0 12px;
+  }
+
+  .ollama-message {
+    gap: 10px;
+  }
+
+  .ollama-error {
+    margin-left: 12px;
+    margin-right: 12px;
+  }
+}
+
+/* ================================
+   OLLAMA HEADER POLISH
+================================ */
+
+.ollama-title-section {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.ollama-title-icon {
+  width: 45px;
+  height: 45px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ede9fe;
+  color: #7c3aed;
+  border-radius: 13px;
+}
+
+.ollama-connection-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #16a34a;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ollama-model-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: white;
+  color: #64748b;
+}
+
+.ollama-model-selector select {
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 10px 3px;
+  color: #334155;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* Welcome Label */
+
+.ollama-welcome-label {
+  display: inline-block;
+  color: #8b5cf6;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 1.5px;
+  margin-bottom: 12px;
+}
+
+/* ================================
+   PROMPT SUGGESTION CARDS
+================================ */
+
+.ollama-suggestions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 30px;
+  width: 100%;
+  max-width: 540px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.ollama-suggestion {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+  min-height: 115px;
+  padding: 17px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ollama-suggestion:hover {
+  border-color: #a78bfa;
+  background: #faf8ff;
+  transform: translateY(-3px);
+  box-shadow: 0 7px 20px rgba(124, 58, 237, 0.08);
+}
+
+.suggestion-icon {
+  font-size: 21px;
+}
+
+.ollama-suggestion strong {
+  color: #334155;
+  font-size: 13px;
+}
+
+.ollama-suggestion > span:last-child {
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ollama-disclaimer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+/* Dark Mode */
+
+.dark-mode .ollama-title-icon {
+  background: #312e81;
+  color: #c4b5fd;
+}
+
+.dark-mode .ollama-model-selector {
+  background: #1e293b;
+  border-color: #475569;
+  color: #cbd5e1;
+}
+
+.dark-mode .ollama-model-selector select {
+  color: #e2e8f0;
+}
+
+.dark-mode .ollama-suggestion {
+  background: #263449;
+  border-color: #475569;
+}
+
+.dark-mode .ollama-suggestion:hover {
+  background: #312e81;
+  border-color: #8b5cf6;
+}
+
+.dark-mode .ollama-suggestion strong {
+  color: #f1f5f9;
+}
+
+.dark-mode .ollama-suggestion > span:last-child {
+  color: #94a3b8;
+}
+
+/* Mobile */
+
+@media (max-width: 600px) {
+  .ollama-suggestions {
+    grid-template-columns: 1fr;
+  }
+
+  .ollama-title-section {
+    align-items: flex-start;
+  }
+
+  .ollama-connection-status {
+    font-size: 12px;
+  }
+}
+
+/* ================================
+   AI MARKDOWN RESPONSE
+================================ */
+
+.ollama-markdown {
+  color: #475569;
+  font-size: 14px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+
+.ollama-markdown p {
+  margin: 0 0 14px;
+}
+
+.ollama-markdown h1,
+.ollama-markdown h2,
+.ollama-markdown h3 {
+  color: #1e293b;
+  margin: 20px 0 10px;
+}
+
+.ollama-markdown ul,
+.ollama-markdown ol {
+  padding-left: 25px;
+  margin: 10px 0 16px;
+}
+
+.ollama-markdown li {
+  padding-left: 4px;
+  margin-bottom: 7px;
+}
+
+.ollama-markdown strong {
+  color: #1e293b;
+  font-weight: 700;
+}
+
+.ollama-markdown code {
+  background: #f1f5f9;
+  color: #7c3aed;
+  padding: 3px 6px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+
+.ollama-markdown pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 18px;
+  border-radius: 12px;
+  overflow-x: auto;
+  margin: 15px 0;
+}
+
+.ollama-markdown pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.dark-mode .ollama-markdown {
+  color: #cbd5e1;
+}
+
+.dark-mode .ollama-markdown h1,
+.dark-mode .ollama-markdown h2,
+.dark-mode .ollama-markdown h3,
+.dark-mode .ollama-markdown strong {
+  color: #f1f5f9;
+}
+
+.dark-mode .ollama-markdown code {
+  background: #334155;
+  color: #c4b5fd;
+}
+
+.dark-mode .ollama-markdown pre {
+  background: #020617;
+}
+/* Code Block Styling */
+
+.ollama-code-block {
+  margin: 18px 0;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0f172a;
+}
+
+.ollama-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 15px;
+  background: #1e293b;
+  color: #cbd5e1;
+  font-size: 12px;
+  text-transform: lowercase;
+}
+
+.ollama-copy-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  padding: 5px 9px;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.ollama-copy-button:hover {
+  background: #334155;
+}
+
+.ollama-code-block pre {
+  margin: 0;
+  padding: 18px;
+  overflow-x: auto;
+  background: #0f172a;
+}
+
+.ollama-code-block pre code {
+  background: transparent;
+  color: #e2e8f0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.7;
+}

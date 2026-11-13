@@ -1,0 +1,23 @@
+backend/.env
+backend/token.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets
+.env
+.env.*
+!.env.example
+**/token.json
+**/credentials.json
+
+# Frontend
+node_modules/
+dist/
+
+# Local databases and generated data
+*.db
+chroma_db/
