@@ -11,8 +11,8 @@ from google_auth import get_google_credentials, require_authenticated_session
 router = APIRouter()
 
 
-def get_calendar_service():
-    credentials = get_google_credentials()
+def get_calendar_service(user_id: str):
+    credentials = get_google_credentials(user_id)
 
     return build(
         "calendar",
@@ -36,12 +36,13 @@ class UpdateEventRequest(BaseModel):
     end_datetime: datetime | None = None
     timezone: str | None = "Asia/Dhaka"
 
-@router.get("/google-calendar/events", dependencies=[Depends(require_authenticated_session)])
+@router.get("/google-calendar/events")
 def get_calendar_events(
+    user_id: str = Depends(require_authenticated_session),
     max_results: int = Query(default=10, ge=1, le=100)
 ):
     try:
-        service = get_calendar_service()
+        service = get_calendar_service(user_id)
 
         now = datetime.now(timezone.utc).isoformat()
 
@@ -67,8 +68,11 @@ def get_calendar_events(
         )
 
 
-@router.post("/google-calendar/create-event", dependencies=[Depends(require_authenticated_session)])
-def create_calendar_event(event: CreateEventRequest):
+@router.post("/google-calendar/create-event")
+def create_calendar_event(
+    event: CreateEventRequest,
+    user_id: str = Depends(require_authenticated_session)
+):
     try:
         if event.end_datetime <= event.start_datetime:
             raise HTTPException(
@@ -76,7 +80,7 @@ def create_calendar_event(event: CreateEventRequest):
                 detail="End time must be after start time."
             )
 
-        service = get_calendar_service()
+        service = get_calendar_service(user_id)
 
         event_body = {
             "summary": event.summary,
@@ -113,13 +117,14 @@ def create_calendar_event(event: CreateEventRequest):
         )
 
 
-@router.put("/google-calendar/events/{event_id}", dependencies=[Depends(require_authenticated_session)])
+@router.put("/google-calendar/events/{event_id}")
 def update_calendar_event(
     event_id: str,
-    event: UpdateEventRequest
+    event: UpdateEventRequest,
+    user_id: str = Depends(require_authenticated_session)
 ):
     try:
-        service = get_calendar_service()
+        service = get_calendar_service(user_id)
 
         # Check whether event exists
         existing_event = service.events().get(
@@ -192,10 +197,13 @@ def update_calendar_event(
         )
 
 
-@router.delete("/google-calendar/events/{event_id}", dependencies=[Depends(require_authenticated_session)])
-def delete_calendar_event(event_id: str):
+@router.delete("/google-calendar/events/{event_id}")
+def delete_calendar_event(
+    event_id: str,
+    user_id: str = Depends(require_authenticated_session)
+):
     try:
-        service = get_calendar_service()
+        service = get_calendar_service(user_id)
 
         # Check whether event exists
         service.events().get(

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import API from "../api";
+import { getGoogleAuthUrl, getGoogleAuthStatus } from "../services";
 import {
   CalendarDays,
   ChevronLeft,
@@ -7,40 +8,20 @@ import {
   Clock,
   MapPin,
   Plus,
-  Video,
-  Pencil,
-  Trash2,
+  Mail,
 } from "lucide-react";
 
 function Calendar() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
 
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [connectingGoogle, setConnectingGoogle] = useState(false);
-
   const [events, setEvents] = useState([]);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [eventError, setEventError] = useState("");
 
-  const [connectionMessage] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-
-    return params.get("google_connected") === "true"
-      ? "Google Calendar connected successfully!"
-      : "";
-  });
-
-  const [connectionError, setConnectionError] = useState("");
-
-  // Create Event Modal States
   const getTodayLocal = () => {
     const date = new Date();
-
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
-      2,
-      "0",
-    )}-${String(date.getDate()).padStart(2, "0")}`;
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   };
 
   const [showCreateEvent, setShowCreateEvent] = useState(false);
@@ -48,6 +29,7 @@ function Calendar() {
   const [newEvent, setNewEvent] = useState({
     summary: "",
     description: "",
+    recipientEmail: "",
     date: getTodayLocal(),
     startTime: "09:00",
     endTime: "10:00",
@@ -56,44 +38,21 @@ function Calendar() {
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [createEventError, setCreateEventError] = useState("");
   const [createEventSuccess, setCreateEventSuccess] = useState("");
-  // Edit Event Modal States
-  const [showEditEvent, setShowEditEvent] = useState(false);
-  const [editingEventId, setEditingEventId] = useState(null);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [connectingGoogle, setConnectingGoogle] = useState(false);
+  const [googleAuthError, setGoogleAuthError] = useState("");
 
-  const [editEvent, setEditEvent] = useState({
-    summary: "",
-    description: "",
-    date: "",
-    startTime: "09:00",
-    endTime: "10:00",
-  });
-
-  const [updatingEvent, setUpdatingEvent] = useState(false);
-  const [editEventError, setEditEventError] = useState("");
-
-  // Delete Event States
-  const [eventToDelete, setEventToDelete] = useState(null);
-  const [deletingEvent, setDeletingEvent] = useState(false);
-  const [deleteEventError, setDeleteEventError] = useState("");
-
-  // Convert a date into YYYY-MM-DD using Bangladesh timezone
-  const getDateKey = (date) => {
-    return new Intl.DateTimeFormat("en-CA", {
+  const getDateKey = (date) =>
+    new Intl.DateTimeFormat("en-CA", {
       timeZone: "Asia/Dhaka",
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
     }).format(date);
-  };
 
-  // Format Google Calendar event time
   const formatEventTime = (event) => {
-    if (event.start?.date && event.end?.date) {
-      return "All day";
-    }
-
-    const start = new Date(event.start.dateTime);
-    const end = new Date(event.end.dateTime);
+    const start = new Date(event.start_time);
+    const end = new Date(event.end_time);
 
     const options = {
       hour: "numeric",
@@ -102,48 +61,56 @@ function Calendar() {
       timeZone: "Asia/Dhaka",
     };
 
-    const startTime = start.toLocaleTimeString("en-US", options);
-    const endTime = end.toLocaleTimeString("en-US", options);
-
-    return `${startTime} - ${endTime}`;
+    return `${start.toLocaleTimeString("en-US", options)} - ${end.toLocaleTimeString("en-US", options)}`;
   };
 
-  // Get the event date in Bangladesh timezone
-  const getEventDate = (event) => {
-    if (event.start?.date) {
-      return event.start.date;
-    }
+  const getEventDate = (event) =>
+    event.start_time ? getDateKey(new Date(event.start_time)) : "";
 
-    if (event.start?.dateTime) {
-      return getDateKey(new Date(event.start.dateTime));
-    }
-
-    return "";
-  };
-
-  // Fetch real events from Google Calendar
-  const fetchGoogleEvents = async () => {
+  const fetchCalendarEvents = async () => {
     try {
-      setLoadingEvents(true);
-      setEventError("");
-
-      const response = await API.get("/google-calendar/events?max_results=100");
-
+      const response = await API.get("/calendar/events");
       setEvents(response.data.events || []);
+      setEventError("");
     } catch (error) {
-      console.error("Google Calendar events fetch failed:", error);
-
+      console.error("Calendar events fetch failed:", error);
       setEventError(
-        error.response?.data?.detail ||
-          "Unable to load Google Calendar events.",
+        error.response?.data?.detail || "Unable to load calendar events.",
       );
     } finally {
       setLoadingEvents(false);
     }
   };
 
+  const handleGoogleConnect = async () => {
+    try {
+      setConnectingGoogle(true);
+      setGoogleAuthError("");
+
+      const authData = await getGoogleAuthUrl();
+
+      if (!authData.authorization_url) {
+        throw new Error("Google authorization URL was not returned.");
+      }
+
+      window.location.assign(authData.authorization_url);
+    } catch (error) {
+      setGoogleAuthError(
+        error.response?.data?.detail ||
+          error.message ||
+          "Unable to connect Google account.",
+      );
+      setConnectingGoogle(false);
+    }
+  };
+
   const handleCreateEvent = async (e) => {
     e.preventDefault();
+
+    if (!googleConnected) {
+      setCreateEventError("Please connect your Google account first.");
+      return;
+    }
 
     try {
       setCreatingEvent(true);
@@ -153,7 +120,6 @@ function Calendar() {
       const startDateTime = new Date(
         `${newEvent.date}T${newEvent.startTime}:00`,
       );
-
       const endDateTime = new Date(`${newEvent.date}T${newEvent.endTime}:00`);
 
       if (endDateTime <= startDateTime) {
@@ -162,185 +128,57 @@ function Calendar() {
       }
 
       const payload = {
-        summary: newEvent.summary,
+        title: newEvent.summary,
         description: newEvent.description,
-        start_datetime: startDateTime.toISOString(),
-        end_datetime: endDateTime.toISOString(),
-        timezone: "Asia/Dhaka",
+        start_time: startDateTime.toISOString(),
+        end_time: endDateTime.toISOString(),
+        location: "",
+        recipient_email: newEvent.recipientEmail.trim(),
       };
 
-      await API.post("/google-calendar/create-event", payload);
+      await API.post("/calendar/send-invitation", payload);
 
-      setCreateEventSuccess("Event created successfully in Google Calendar!");
+      setCreateEventSuccess(
+        "Google Calendar invitation sent successfully! Check the recipient’s email for the calendar invitation.",
+      );
 
       setShowCreateEvent(false);
 
       setNewEvent({
         summary: "",
         description: "",
+        recipientEmail: "",
         date: getTodayLocal(),
         startTime: "09:00",
         endTime: "10:00",
       });
 
-      await fetchGoogleEvents();
+      await fetchCalendarEvents();
     } catch (error) {
-      console.error("Event creation failed:", error);
-
+      console.error("Invitation sending failed:", error);
       setCreateEventError(
-        error.response?.data?.detail ||
-          "Unable to create Google Calendar event.",
+        error.response?.data?.detail || "Unable to send calendar invitation.",
       );
     } finally {
       setCreatingEvent(false);
     }
   };
-  // Open Edit Event Modal
-  const handleOpenEditEvent = (event) => {
-    const start = new Date(event.start.dateTime);
-    const end = new Date(event.end.dateTime);
 
-    const getDhakaTime = (date) =>
-      new Intl.DateTimeFormat("en-GB", {
-        timeZone: "Asia/Dhaka",
-        hour: "2-digit",
-        minute: "2-digit",
-        hourCycle: "h23",
-      }).format(date);
-
-    setEditingEventId(event.id);
-
-    setEditEvent({
-      summary: event.summary || "",
-      description: event.description || "",
-      date: getDateKey(start),
-      startTime: getDhakaTime(start),
-      endTime: getDhakaTime(end),
-    });
-
-    setEditEventError("");
-    setShowEditEvent(true);
-  };
-
-  // Update Event
-  const handleUpdateEvent = async (e) => {
-    e.preventDefault();
-
-    try {
-      setUpdatingEvent(true);
-      setEditEventError("");
-
-      const startDateTime = new Date(
-        `${editEvent.date}T${editEvent.startTime}:00`,
-      );
-
-      const endDateTime = new Date(`${editEvent.date}T${editEvent.endTime}:00`);
-
-      if (endDateTime <= startDateTime) {
-        setEditEventError("End time must be after start time.");
-        return;
-      }
-
-      const payload = {
-        summary: editEvent.summary,
-        description: editEvent.description,
-        start_datetime: startDateTime.toISOString(),
-        end_datetime: endDateTime.toISOString(),
-        timezone: "Asia/Dhaka",
-      };
-
-      await API.put(`/google-calendar/events/${editingEventId}`, payload);
-
-      setShowEditEvent(false);
-      setEditingEventId(null);
-
-      await fetchGoogleEvents();
-    } catch (error) {
-      console.error("Event update failed:", error);
-
-      setEditEventError(
-        error.response?.data?.detail ||
-          "Unable to update Google Calendar event.",
-      );
-    } finally {
-      setUpdatingEvent(false);
-    }
-  };
-  // Open Delete Confirmation
-  const handleOpenDeleteConfirm = (event) => {
-    setEventToDelete(event);
-    setDeleteEventError("");
-  };
-
-  // Delete Event
-  const handleDeleteEvent = async () => {
-    if (!eventToDelete) return;
-
-    try {
-      setDeletingEvent(true);
-      setDeleteEventError("");
-
-      await API.delete(`/google-calendar/events/${eventToDelete.id}`);
-
-      setEventToDelete(null);
-
-      await fetchGoogleEvents();
-    } catch (error) {
-      console.error("Event deletion failed:", error);
-
-      setDeleteEventError(
-        error.response?.data?.detail ||
-          "Unable to delete Google Calendar event.",
-      );
-    } finally {
-      setDeletingEvent(false);
-    }
-  };
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const loadData = async () => {
+      await fetchCalendarEvents();
 
-    if (params.get("google_connected") === "true") {
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-
-    const initializeCalendar = async () => {
       try {
-        const response = await API.get("/auth/google/status");
-
-        setGoogleConnected(response.data.connected);
-
-        if (response.data.connected) {
-          await fetchGoogleEvents();
-        } else {
-          setLoadingEvents(false);
-        }
+        const status = await getGoogleAuthStatus();
+        setGoogleConnected(Boolean(status.connected));
       } catch (error) {
-        console.error("Google status check failed:", error);
-        setLoadingEvents(false);
+        console.error("Google connection status check failed:", error);
+        setGoogleConnected(false);
       }
     };
 
-    initializeCalendar();
+    loadData();
   }, []);
-
-  const handleGoogleConnect = async () => {
-    try {
-      setConnectingGoogle(true);
-      setConnectionError("");
-
-      const response = await API.get("/auth/google/login");
-
-      window.location.href = response.data.authorization_url;
-    } catch (error) {
-      console.error("Google connection failed:", error);
-
-      setConnectionError(
-        error.response?.data?.detail || "Unable to connect Google Calendar.",
-      );
-
-      setConnectingGoogle(false);
-    }
-  };
 
   const changeMonth = (direction) => {
     setCurrentDate(
@@ -365,12 +203,10 @@ function Calendar() {
 
   const selectedDateKey = getDateKey(selectedDate);
 
-  // Show only events belonging to the selected date
   const selectedEvents = events.filter(
     (event) => getEventDate(event) === selectedDateKey,
   );
 
-  // Dates that contain Google Calendar events
   const eventDates = new Set(events.map(getEventDate));
 
   const isSelected = (day) =>
@@ -392,22 +228,35 @@ function Calendar() {
           </p>
         </div>
 
-        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: "10px",
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
           <button
+            type="button"
             className="add-event-button"
             onClick={handleGoogleConnect}
             disabled={connectingGoogle}
           >
+            <Mail size={18} />
             {connectingGoogle
               ? "Connecting..."
               : googleConnected
-                ? "Google Connected ✓"
-                : "Connect Google Calendar"}
+                ? "Google Connected"
+                : "Connect Gmail"}
           </button>
 
           <button
             className="add-event-button"
-            onClick={() => setShowCreateEvent(true)}
+            onClick={() => {
+              setCreateEventError("");
+              setCreateEventSuccess("");
+              setShowCreateEvent(true);
+            }}
           >
             <Plus size={18} />
             Add Event
@@ -415,12 +264,14 @@ function Calendar() {
         </div>
       </div>
 
-      {connectionMessage && (
-        <p style={{ color: "green", margin: "12px 0" }}>{connectionMessage}</p>
+      {googleAuthError && (
+        <p style={{ color: "red", margin: "12px 0" }}>{googleAuthError}</p>
       )}
 
-      {connectionError && (
-        <p style={{ color: "red", margin: "12px 0" }}>{connectionError}</p>
+      {!googleConnected && (
+        <p style={{ margin: "12px 0", color: "#b7791f" }}>
+          Connect your Gmail account before sending calendar invitations.
+        </p>
       )}
 
       {createEventSuccess && (
@@ -430,7 +281,7 @@ function Calendar() {
       {showCreateEvent && (
         <div className="event-modal-overlay">
           <div className="event-modal">
-            <h2>Create New Event</h2>
+            <h2>Create Calendar Invitation</h2>
 
             <form onSubmit={handleCreateEvent}>
               <label>Event Title</label>
@@ -439,10 +290,7 @@ function Calendar() {
                 placeholder="Enter event title"
                 value={newEvent.summary}
                 onChange={(e) =>
-                  setNewEvent({
-                    ...newEvent,
-                    summary: e.target.value,
-                  })
+                  setNewEvent({ ...newEvent, summary: e.target.value })
                 }
                 required
               />
@@ -452,11 +300,22 @@ function Calendar() {
                 placeholder="Enter event description"
                 value={newEvent.description}
                 onChange={(e) =>
+                  setNewEvent({ ...newEvent, description: e.target.value })
+                }
+              />
+
+              <label>Recipient Email</label>
+              <input
+                type="email"
+                placeholder="Enter recipient email address"
+                value={newEvent.recipientEmail}
+                onChange={(e) =>
                   setNewEvent({
                     ...newEvent,
-                    description: e.target.value,
+                    recipientEmail: e.target.value,
                   })
                 }
+                required
               />
 
               <label>Date</label>
@@ -464,10 +323,7 @@ function Calendar() {
                 type="date"
                 value={newEvent.date}
                 onChange={(e) =>
-                  setNewEvent({
-                    ...newEvent,
-                    date: e.target.value,
-                  })
+                  setNewEvent({ ...newEvent, date: e.target.value })
                 }
                 required
               />
@@ -477,10 +333,7 @@ function Calendar() {
                 type="time"
                 value={newEvent.startTime}
                 onChange={(e) =>
-                  setNewEvent({
-                    ...newEvent,
-                    startTime: e.target.value,
-                  })
+                  setNewEvent({ ...newEvent, startTime: e.target.value })
                 }
                 required
               />
@@ -490,10 +343,7 @@ function Calendar() {
                 type="time"
                 value={newEvent.endTime}
                 onChange={(e) =>
-                  setNewEvent({
-                    ...newEvent,
-                    endTime: e.target.value,
-                  })
+                  setNewEvent({ ...newEvent, endTime: e.target.value })
                 }
                 required
               />
@@ -509,12 +359,13 @@ function Calendar() {
                     setShowCreateEvent(false);
                     setCreateEventError("");
                   }}
+                  disabled={creatingEvent}
                 >
                   Cancel
                 </button>
 
                 <button type="submit" disabled={creatingEvent}>
-                  {creatingEvent ? "Creating..." : "Create Event"}
+                  {creatingEvent ? "Sending Invitation..." : "Send Invitation"}
                 </button>
               </div>
             </form>
@@ -522,148 +373,6 @@ function Calendar() {
         </div>
       )}
 
-      {showEditEvent && (
-        <div className="event-modal-overlay">
-          <div className="event-modal">
-            <h2>Edit Event</h2>
-
-            <form onSubmit={handleUpdateEvent}>
-              <label>Event Title</label>
-
-              <input
-                type="text"
-                placeholder="Enter event title"
-                value={editEvent.summary}
-                onChange={(e) =>
-                  setEditEvent({
-                    ...editEvent,
-                    summary: e.target.value,
-                  })
-                }
-                required
-              />
-
-              <label>Description</label>
-
-              <textarea
-                placeholder="Enter event description"
-                value={editEvent.description}
-                onChange={(e) =>
-                  setEditEvent({
-                    ...editEvent,
-                    description: e.target.value,
-                  })
-                }
-              />
-
-              <label>Date</label>
-
-              <input
-                type="date"
-                value={editEvent.date}
-                onChange={(e) =>
-                  setEditEvent({
-                    ...editEvent,
-                    date: e.target.value,
-                  })
-                }
-                required
-              />
-
-              <label>Start Time</label>
-
-              <input
-                type="time"
-                value={editEvent.startTime}
-                onChange={(e) =>
-                  setEditEvent({
-                    ...editEvent,
-                    startTime: e.target.value,
-                  })
-                }
-                required
-              />
-
-              <label>End Time</label>
-
-              <input
-                type="time"
-                value={editEvent.endTime}
-                onChange={(e) =>
-                  setEditEvent({
-                    ...editEvent,
-                    endTime: e.target.value,
-                  })
-                }
-                required
-              />
-
-              {editEventError && (
-                <p style={{ color: "red" }}>{editEventError}</p>
-              )}
-
-              <div className="event-modal-actions">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowEditEvent(false);
-                    setEditEventError("");
-                  }}
-                  disabled={updatingEvent}
-                >
-                  Cancel
-                </button>
-
-                <button type="submit" disabled={updatingEvent}>
-                  {updatingEvent ? "Saving..." : "Save Changes"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-      {/* Delete Event Confirmation Modal */}
-      {eventToDelete && (
-        <div className="event-modal-overlay">
-          <div className="event-modal">
-            <h2>Delete Event?</h2>
-
-            <p>
-              Are you sure you want to delete
-              <strong> {eventToDelete.summary}</strong>?
-            </p>
-
-            <p style={{ color: "#e57373", fontSize: "13px" }}>
-              This action cannot be undone.
-            </p>
-
-            {deleteEventError && (
-              <p style={{ color: "red" }}>{deleteEventError}</p>
-            )}
-
-            <div className="event-modal-actions">
-              <button
-                type="button"
-                onClick={() => {
-                  setEventToDelete(null);
-                  setDeleteEventError("");
-                }}
-                disabled={deletingEvent}
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={handleDeleteEvent}
-                disabled={deletingEvent}
-              >
-                {deletingEvent ? "Deleting..." : "Yes, Delete"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       <div className="calendar-layout">
         <section className="calendar-main">
           <div className="month-header">
@@ -728,7 +437,6 @@ function Calendar() {
                   {day && (
                     <>
                       <span>{day}</span>
-
                       {eventDates.has(dateKey) && (
                         <span className="event-dot" />
                       )}
@@ -746,13 +454,11 @@ function Calendar() {
               <h2>Upcoming Events</h2>
               <p>Your scheduled activities</p>
             </div>
-
             <CalendarDays size={22} />
           </div>
 
           <div className="selected-date">
             <span>SELECTED DATE</span>
-
             <h3>
               {selectedDate.toLocaleDateString("en-US", {
                 weekday: "long",
@@ -765,43 +471,21 @@ function Calendar() {
 
           <div className="event-list">
             {loadingEvents ? (
-              <p>Loading Google Calendar events...</p>
+              <p>Loading calendar events...</p>
             ) : eventError ? (
               <p style={{ color: "red" }}>{eventError}</p>
-            ) : !googleConnected ? (
-              <p>Connect your Google Calendar to see your events.</p>
             ) : selectedEvents.length === 0 ? (
               <p>No events scheduled for this date.</p>
             ) : (
               selectedEvents.map((event) => (
                 <div className="event-card" key={event.id}>
                   <div className="event-card-top">
-                    <span className="event-type meeting">Google Calendar</span>
-
-                    <div className="event-action-buttons">
-                      {event.start?.dateTime && (
-                        <button
-                          type="button"
-                          className="event-edit-button"
-                          onClick={() => handleOpenEditEvent(event)}
-                        >
-                          <Pencil size={13} />
-                          Edit
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        className="event-delete-button"
-                        onClick={() => handleOpenDeleteConfirm(event)}
-                      >
-                        <Trash2 size={13} />
-                        Delete
-                      </button>
-                    </div>
+                    <span className="event-type meeting">
+                      <Mail size={13} /> Email Invitation
+                    </span>
                   </div>
 
-                  <h3>{event.summary || "Untitled Event"}</h3>
+                  <h3>{event.title || "Untitled Event"}</h3>
 
                   <p>
                     <Clock size={14} />
@@ -809,14 +493,8 @@ function Calendar() {
                   </p>
 
                   <p>
-                    {event.hangoutLink ? (
-                      <Video size={14} />
-                    ) : (
-                      <MapPin size={14} />
-                    )}
-
-                    {event.location ||
-                      (event.hangoutLink ? "Google Meet" : "No location")}
+                    <MapPin size={14} />
+                    {event.location || "No location"}
                   </p>
                 </div>
               ))

@@ -2,11 +2,12 @@ import os
 import sqlite3
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from ollama import Client
-from google_auth import router as google_auth_router
-from google_calendar import router as google_calendar_router
+from calendar_invitation import create_ics_file, send_invitation_email
+from google_auth import router as google_auth_router, require_authenticated_session
+from google_calendar import router as google_calendar_router, get_calendar_service
 from google_gmail import router as google_gmail_router
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -96,6 +97,12 @@ def initialize_calendar_db():
         )
     """)
 
+    columns = [
+        row[1] for row in conn.execute("PRAGMA table_info(events)").fetchall()
+    ]
+    if "user_id" not in columns:
+        conn.execute("ALTER TABLE events ADD COLUMN user_id TEXT")
+
     conn.commit()
     conn.close()
 
@@ -136,6 +143,15 @@ class CalendarEventRequest(BaseModel):
     start_time: datetime
     end_time: datetime
     location: str = ""
+
+class CalendarInvitationRequest(BaseModel):
+    title: str
+    description: str = ""
+    start_time: datetime
+    end_time: datetime
+    location: str = ""
+    recipient_email: str
+
 
 class SuggestTimeRequest(BaseModel):
     preferred_date: str
@@ -388,8 +404,98 @@ def generate_email_reply(request: EmailReplyRequest):
 # Create Calendar Event
 # ==============================
 
+@app.post("/calendar/send-invitation")
+def send_calendar_invitation(
+    request: CalendarInvitationRequest,
+    user_id: str = Depends(require_authenticated_session)
+):
+
+    import re
+
+    recipient_email = request.recipient_email.strip()
+
+    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\.[^\\s@]+", recipient_email):
+        raise HTTPException(status_code=400, detail="Invalid recipient email address")
+
+    if request.start_time >= request.end_time:
+        raise HTTPException(
+            status_code=400,
+            detail="End time must be after start time"
+        )
+
+    conn = None
+
+    try:
+        service = get_calendar_service(user_id)
+
+        event_body = {
+            "summary": request.title,
+            "description": request.description,
+            "location": request.location,
+            "start": {
+                "dateTime": request.start_time.isoformat(),
+            },
+            "end": {
+                "dateTime": request.end_time.isoformat(),
+            },
+            "attendees": [
+                {"email": recipient_email}
+            ],
+        }
+
+        created_event = service.events().insert(
+            calendarId="primary",
+            body=event_body,
+            sendUpdates="all"
+        ).execute()
+
+        conn = sqlite3.connect("calendar.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO events
+            (title, description, start_time, end_time, location, user_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request.title,
+                request.description,
+                request.start_time.isoformat(),
+                request.end_time.isoformat(),
+                request.location,
+                user_id,
+            )
+        )
+
+        event_id = cursor.lastrowid
+        conn.commit()
+
+        return {
+            "message": "Google Calendar invitation sent successfully",
+            "event_id": event_id,
+            "google_event_id": created_event.get("id"),
+            "event_link": created_event.get("htmlLink"),
+            "recipient_email": recipient_email,
+            "summary": created_event.get("summary"),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Invitation creation failed: {str(error)}"
+        )
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 @app.post("/calendar/create-event")
-def create_calendar_event(request: CalendarEventRequest):
+def create_calendar_event(
+    request: CalendarEventRequest,
+    user_id: str = Depends(require_authenticated_session)
+):
 
     if request.start_time.tzinfo != request.end_time.tzinfo:
         raise HTTPException(
@@ -410,15 +516,16 @@ def create_calendar_event(request: CalendarEventRequest):
         cursor.execute(
             """
             INSERT INTO events
-            (title, description, start_time, end_time, location)
-            VALUES (?, ?, ?, ?, ?)
+            (title, description, start_time, end_time, location, user_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 request.title,
                 request.description,
                 request.start_time.isoformat(),
                 request.end_time.isoformat(),
-                request.location
+                request.location,
+                user_id
             )
         )
 
@@ -448,7 +555,9 @@ def create_calendar_event(request: CalendarEventRequest):
 # ==============================
 
 @app.get("/calendar/events")
-def get_calendar_events():
+def get_calendar_events(
+    user_id: str = Depends(require_authenticated_session)
+):
 
     try:
         conn = sqlite3.connect("calendar.db")
@@ -458,8 +567,9 @@ def get_calendar_events():
 
         cursor.execute("""
             SELECT * FROM events
+            WHERE user_id = ?
             ORDER BY start_time ASC
-        """)
+        """, (user_id,))
 
         rows = cursor.fetchall()
 
@@ -484,7 +594,10 @@ def get_calendar_events():
 # ==============================
 
 @app.post("/calendar/suggest-time")
-def suggest_meeting_time(request: SuggestTimeRequest):
+def suggest_meeting_time(
+    request: SuggestTimeRequest,
+    user_id: str = Depends(require_authenticated_session)
+):
 
     if request.duration_minutes <= 0:
         raise HTTPException(
@@ -499,8 +612,9 @@ def suggest_meeting_time(request: SuggestTimeRequest):
         cursor.execute("""
             SELECT title, start_time, end_time
             FROM events
-            WHERE date(start_time) = date(?)
-        """, (request.preferred_date,))
+            WHERE user_id = ?
+              AND date(start_time) = date(?)
+        """, (user_id, request.preferred_date))
 
         existing_events = cursor.fetchall()
         conn.close()

@@ -21,3 +21,4 @@ dist/
 # Local databases and generated data
 *.db
 chroma_db/
+backend/backup_multi_user/

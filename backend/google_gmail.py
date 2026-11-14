@@ -2,6 +2,9 @@
 import base64
 
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 
 from fastapi import APIRouter, HTTPException, Query, Depends
 from googleapiclient.discovery import build
@@ -13,8 +16,8 @@ from google_auth import get_google_credentials, require_authenticated_session
 router = APIRouter()
 
 
-def get_gmail_service():
-    credentials = get_google_credentials()
+def get_gmail_service(user_id: str):
+    credentials = get_google_credentials(user_id)
 
     return build(
         "gmail",
@@ -44,13 +47,14 @@ def decode_email_body(payload):
     return ""
 
 
-@router.get("/gmail/messages", dependencies=[Depends(require_authenticated_session)])
+@router.get("/gmail/messages")
 def get_gmail_messages(
+    user_id: str = Depends(require_authenticated_session),
     max_results: int = Query(default=10, ge=1, le=50),
     category: str = Query(default="inbox")
 ):
     try:
-        service = get_gmail_service()
+        service = get_gmail_service(user_id)
 
         category = category.lower()
 
@@ -130,8 +134,11 @@ class GmailReplyRequest(BaseModel):
     reply_body: str
 
 
-@router.post("/gmail/reply", dependencies=[Depends(require_authenticated_session)])
-def send_gmail_reply(request: GmailReplyRequest):
+@router.post("/gmail/reply")
+def send_gmail_reply(
+    request: GmailReplyRequest,
+    user_id: str = Depends(require_authenticated_session)
+):
     try:
         if not request.reply_body.strip():
             raise HTTPException(
@@ -139,7 +146,7 @@ def send_gmail_reply(request: GmailReplyRequest):
                 detail="Reply message cannot be empty."
             )
 
-        service = get_gmail_service()
+        service = get_gmail_service(user_id)
 
         original_email = service.users().messages().get(
             userId="me",
@@ -207,3 +214,78 @@ def send_gmail_reply(request: GmailReplyRequest):
             status_code=400,
             detail=f"Gmail reply error: {error}"
         )
+
+
+def get_gmail_sender_email(user_id: str):
+    try:
+        profile = get_gmail_service(user_id).users().getProfile(
+            userId="me"
+        ).execute()
+        return profile.get("emailAddress", "")
+    except HttpError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not read connected Gmail account: {error}"
+        )
+
+
+def send_gmail_invitation(user_id, recipient_email, title, ics_content):
+    try:
+        service = get_gmail_service(user_id)
+        sender_email = get_gmail_sender_email(user_id)
+
+        if not sender_email:
+            raise HTTPException(
+                status_code=502,
+                detail="Connected Gmail address not found."
+            )
+
+        message = MIMEMultipart("mixed")
+        message["to"] = recipient_email
+        message["from"] = sender_email
+        message["subject"] = f"Calendar Invitation: {title}"
+
+        message.attach(MIMEText(
+            f"Hello,\n\n"
+            f"You have received a calendar invitation for: {title}\n\n"
+            "Please open the attached meeting_invitation.ics file "
+            "to add this event to your calendar.\n\n"
+            f"Regards,\n{sender_email}",
+            "plain",
+            "utf-8"
+        ))
+
+        attachment = MIMEBase(
+            "text", "calendar",
+            method="REQUEST",
+            name="meeting_invitation.ics"
+        )
+        attachment.set_payload(ics_content)
+        encoders.encode_base64(attachment)
+        attachment.add_header(
+            "Content-Disposition",
+            "attachment",
+            filename="meeting_invitation.ics"
+        )
+        message.attach(attachment)
+
+        raw_message = base64.urlsafe_b64encode(
+            message.as_bytes()
+        ).decode("utf-8")
+
+        sent = service.users().messages().send(
+            userId="me",
+            body={"raw": raw_message}
+        ).execute()
+
+        return {
+            "sender_email": sender_email,
+            "message_id": sent.get("id")
+        }
+
+    except HttpError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gmail API could not send invitation: {error}"
+        )
+
