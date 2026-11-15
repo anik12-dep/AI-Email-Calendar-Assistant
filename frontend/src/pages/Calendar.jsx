@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Clock,
   MapPin,
+  Mail,
   Plus,
 } from "lucide-react";
 
