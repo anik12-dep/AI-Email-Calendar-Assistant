@@ -1301,6 +1301,9 @@ body {
 
 .event-modal h2 {
   margin: 0 0 22px;
+  color: #111827;
+  font-size: 22px;
+  font-weight: 700;
 }
 
 .event-modal form {
