@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import API from "../api";
-import { getGoogleAuthUrl, getGoogleAuthStatus } from "../services";
 import {
   CalendarDays,
   ChevronLeft,
@@ -8,7 +7,6 @@ import {
   Clock,
   MapPin,
   Plus,
-  Mail,
 } from "lucide-react";
 
 function Calendar() {
@@ -29,6 +27,7 @@ function Calendar() {
   const [newEvent, setNewEvent] = useState({
     summary: "",
     description: "",
+    senderEmail: "",
     recipientEmail: "",
     date: getTodayLocal(),
     startTime: "09:00",
@@ -38,9 +37,6 @@ function Calendar() {
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [createEventError, setCreateEventError] = useState("");
   const [createEventSuccess, setCreateEventSuccess] = useState("");
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [connectingGoogle, setConnectingGoogle] = useState(false);
-  const [googleAuthError, setGoogleAuthError] = useState("");
 
   const getDateKey = (date) =>
     new Intl.DateTimeFormat("en-CA", {
@@ -82,35 +78,8 @@ function Calendar() {
     }
   };
 
-  const handleGoogleConnect = async () => {
-    try {
-      setConnectingGoogle(true);
-      setGoogleAuthError("");
-
-      const authData = await getGoogleAuthUrl();
-
-      if (!authData.authorization_url) {
-        throw new Error("Google authorization URL was not returned.");
-      }
-
-      window.location.assign(authData.authorization_url);
-    } catch (error) {
-      setGoogleAuthError(
-        error.response?.data?.detail ||
-          error.message ||
-          "Unable to connect Google account.",
-      );
-      setConnectingGoogle(false);
-    }
-  };
-
   const handleCreateEvent = async (e) => {
     e.preventDefault();
-
-    if (!googleConnected) {
-      setCreateEventError("Please connect your Google account first.");
-      return;
-    }
 
     try {
       setCreatingEvent(true);
@@ -133,13 +102,14 @@ function Calendar() {
         start_time: startDateTime.toISOString(),
         end_time: endDateTime.toISOString(),
         location: "",
+        sender_email: newEvent.senderEmail.trim(),
         recipient_email: newEvent.recipientEmail.trim(),
       };
 
-      await API.post("/calendar/send-invitation", payload);
+      await API.post("/calendar/send-public-invitation", payload);
 
       setCreateEventSuccess(
-        "Google Calendar invitation sent successfully! Check the recipient’s email for the calendar invitation.",
+        "Invitation email sent successfully! The event has been saved to your calendar.",
       );
 
       setShowCreateEvent(false);
@@ -165,19 +135,7 @@ function Calendar() {
   };
 
   useEffect(() => {
-    const loadData = async () => {
-      await fetchCalendarEvents();
-
-      try {
-        const status = await getGoogleAuthStatus();
-        setGoogleConnected(Boolean(status.connected));
-      } catch (error) {
-        console.error("Google connection status check failed:", error);
-        setGoogleConnected(false);
-      }
-    };
-
-    loadData();
+    fetchCalendarEvents();
   }, []);
 
   const changeMonth = (direction) => {
@@ -237,20 +195,6 @@ function Calendar() {
           }}
         >
           <button
-            type="button"
-            className="add-event-button"
-            onClick={handleGoogleConnect}
-            disabled={connectingGoogle}
-          >
-            <Mail size={18} />
-            {connectingGoogle
-              ? "Connecting..."
-              : googleConnected
-                ? "Google Connected"
-                : "Connect Gmail"}
-          </button>
-
-          <button
             className="add-event-button"
             onClick={() => {
               setCreateEventError("");
@@ -263,16 +207,6 @@ function Calendar() {
           </button>
         </div>
       </div>
-
-      {googleAuthError && (
-        <p style={{ color: "red", margin: "12px 0" }}>{googleAuthError}</p>
-      )}
-
-      {!googleConnected && (
-        <p style={{ margin: "12px 0", color: "#b7791f" }}>
-          Connect your Gmail account before sending calendar invitations.
-        </p>
-      )}
 
       {createEventSuccess && (
         <p style={{ color: "green", margin: "12px 0" }}>{createEventSuccess}</p>
@@ -302,6 +236,17 @@ function Calendar() {
                 onChange={(e) =>
                   setNewEvent({ ...newEvent, description: e.target.value })
                 }
+              />
+
+              <label>Sender Email</label>
+              <input
+                type="email"
+                placeholder="Your email address"
+                value={newEvent.senderEmail}
+                onChange={(e) =>
+                  setNewEvent({ ...newEvent, senderEmail: e.target.value })
+                }
+                required
               />
 
               <label>Recipient Email</label>

@@ -1,14 +1,12 @@
 import os
 import sqlite3
+import uuid
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from pydantic import BaseModel
 from ollama import Client
 from calendar_invitation import create_ics_file, send_invitation_email
-from google_auth import router as google_auth_router, require_authenticated_session
-from google_calendar import router as google_calendar_router, get_calendar_service
-from google_gmail import router as google_gmail_router
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
@@ -44,9 +42,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(google_auth_router)
-app.include_router(google_calendar_router)
-app.include_router(google_gmail_router)
 
 
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
@@ -65,6 +60,20 @@ app.add_middleware(
     same_site="none" if SESSION_COOKIE_SECURE else "lax",
     https_only=SESSION_COOKIE_SECURE,
 )
+
+# ==============================
+# Guest Visitor Session
+# ==============================
+
+def get_guest_id(request: Request) -> str:
+    guest_id = request.session.get("guest_id")
+
+    if not guest_id:
+        guest_id = str(uuid.uuid4())
+        request.session["guest_id"] = guest_id
+
+    return guest_id
+
 
 # ==============================
 # Ollama Configuration
@@ -150,6 +159,7 @@ class CalendarInvitationRequest(BaseModel):
     start_time: datetime
     end_time: datetime
     location: str = ""
+    sender_email: str
     recipient_email: str
 
 
@@ -404,17 +414,22 @@ def generate_email_reply(request: EmailReplyRequest):
 # Create Calendar Event
 # ==============================
 
-@app.post("/calendar/send-invitation")
-def send_calendar_invitation(
+@app.post("/calendar/send-public-invitation")
+def send_public_calendar_invitation(
     request: CalendarInvitationRequest,
-    user_id: str = Depends(require_authenticated_session)
+    user_id: str = Depends(get_guest_id)
 ):
-
     import re
 
+    sender_email = request.sender_email.strip()
     recipient_email = request.recipient_email.strip()
 
-    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\.[^\\s@]+", recipient_email):
+    email_pattern = r"[^\s@]+@[^\s@]+\.[^\s@]+"
+
+    if not re.fullmatch(email_pattern, sender_email):
+        raise HTTPException(status_code=400, detail="Invalid sender email address")
+
+    if not re.fullmatch(email_pattern, recipient_email):
         raise HTTPException(status_code=400, detail="Invalid recipient email address")
 
     if request.start_time >= request.end_time:
@@ -426,31 +441,26 @@ def send_calendar_invitation(
     conn = None
 
     try:
-        service = get_calendar_service(user_id)
+        ics_content = create_ics_file(
+            request.title,
+            request.description,
+            request.start_time,
+            request.end_time,
+            request.location,
+            recipient_email,
+            organizer_email=os.getenv("SMTP_FROM_EMAIL", "")
+        )
 
-        event_body = {
-            "summary": request.title,
-            "description": request.description,
-            "location": request.location,
-            "start": {
-                "dateTime": request.start_time.isoformat(),
-            },
-            "end": {
-                "dateTime": request.end_time.isoformat(),
-            },
-            "attendees": [
-                {"email": recipient_email}
-            ],
-        }
-
-        created_event = service.events().insert(
-            calendarId="primary",
-            body=event_body,
-            sendUpdates="all"
-        ).execute()
+        send_invitation_email(
+            recipient_email,
+            request.title,
+            ics_content,
+            reply_to_email=sender_email
+        )
 
         conn = sqlite3.connect("calendar.db")
         cursor = conn.cursor()
+
         cursor.execute(
             """
             INSERT INTO events
@@ -463,7 +473,7 @@ def send_calendar_invitation(
                 request.start_time.isoformat(),
                 request.end_time.isoformat(),
                 request.location,
-                user_id,
+                user_id
             )
         )
 
@@ -471,20 +481,21 @@ def send_calendar_invitation(
         conn.commit()
 
         return {
-            "message": "Google Calendar invitation sent successfully",
+            "message": "Invitation email sent successfully",
             "event_id": event_id,
-            "google_event_id": created_event.get("id"),
-            "event_link": created_event.get("htmlLink"),
             "recipient_email": recipient_email,
-            "summary": created_event.get("summary"),
+            "title": request.title
         }
 
     except HTTPException:
         raise
     except Exception as error:
+        if conn is not None:
+            conn.rollback()
+
         raise HTTPException(
             status_code=500,
-            detail=f"Invitation creation failed: {str(error)}"
+            detail=f"Invitation processing failed: {str(error)}"
         )
     finally:
         if conn is not None:
@@ -494,7 +505,7 @@ def send_calendar_invitation(
 @app.post("/calendar/create-event")
 def create_calendar_event(
     request: CalendarEventRequest,
-    user_id: str = Depends(require_authenticated_session)
+    user_id: str = Depends(get_guest_id)
 ):
 
     if request.start_time.tzinfo != request.end_time.tzinfo:
@@ -556,7 +567,7 @@ def create_calendar_event(
 
 @app.get("/calendar/events")
 def get_calendar_events(
-    user_id: str = Depends(require_authenticated_session)
+    user_id: str = Depends(get_guest_id)
 ):
 
     try:
@@ -596,7 +607,7 @@ def get_calendar_events(
 @app.post("/calendar/suggest-time")
 def suggest_meeting_time(
     request: SuggestTimeRequest,
-    user_id: str = Depends(require_authenticated_session)
+    user_id: str = Depends(get_guest_id)
 ):
 
     if request.duration_minutes <= 0:

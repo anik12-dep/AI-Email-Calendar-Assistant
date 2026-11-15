@@ -61,6 +61,7 @@ def send_invitation_email(
     recipient_email: str,
     title: str,
     ics_content: bytes,
+    reply_to_email: str = "",
 ) -> None:
 
     smtp_host = os.getenv("SMTP_HOST")
@@ -88,6 +89,9 @@ def send_invitation_email(
     message["Subject"] = f"Calendar Invitation: {title}"
     message["From"] = formataddr((sender_name, sender_email))
     message["To"] = recipient_email
+
+    if reply_to_email:
+        message["Reply-To"] = reply_to_email
     message["Content-Class"] = "urn:content-classes:calendarmessage"
 
     message.set_content(

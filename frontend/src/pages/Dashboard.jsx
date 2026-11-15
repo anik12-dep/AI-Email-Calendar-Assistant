@@ -15,26 +15,14 @@ import {
   CalendarCheck,
 } from "lucide-react";
 
-// Fetch dashboard data from API
+// Fetch visitor's own calendar events
 async function getDashboardData() {
-  const statusResponse = await API.get("/auth/google/status");
-  const connected = statusResponse.data.connected;
-
-  if (!connected) {
-    return { connected: false, events: [] };
-  }
-
-  const response = await API.get("/google-calendar/events?max_results=100");
-
-  return {
-    connected: true,
-    events: response.data.events || [],
-  };
+  const response = await API.get("/calendar/events");
+  return { events: response.data.events || [] };
 }
 
 function Dashboard() {
   const [events, setEvents] = useState([]);
-  const [googleConnected, setGoogleConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -76,30 +64,12 @@ function Dashboard() {
     }).format(date);
 
   // Get event date
-  const getEventDate = (event) => {
-    if (event.start?.date) {
-      return event.start.date;
-    }
-
-    if (event.start?.dateTime) {
-      return getDateKey(new Date(event.start.dateTime));
-    }
-
-    return "";
-  };
+  const getEventDate = (event) =>
+    event.start_time ? getDateKey(new Date(event.start_time)) : "";
 
   // Get event starting time
-  const getEventStart = (event) => {
-    if (event.start?.dateTime) {
-      return new Date(event.start.dateTime);
-    }
-
-    if (event.start?.date) {
-      return new Date(`${event.start.date}T00:00:00+06:00`);
-    }
-
-    return null;
-  };
+  const getEventStart = (event) =>
+    event.start_time ? new Date(event.start_time) : null;
 
   // Format event date
   const formatEventDate = (event) => {
@@ -119,12 +89,8 @@ function Dashboard() {
 
   // Format event time
   const formatEventTime = (event) => {
-    if (event.start?.date) {
-      return "All day";
-    }
-
-    const start = new Date(event.start.dateTime);
-    const end = new Date(event.end.dateTime);
+    const start = new Date(event.start_time);
+    const end = new Date(event.end_time);
 
     const options = {
       hour: "numeric",
@@ -133,10 +99,7 @@ function Dashboard() {
       timeZone: "Asia/Dhaka",
     };
 
-    const startTime = start.toLocaleTimeString("en-US", options);
-    const endTime = end.toLocaleTimeString("en-US", options);
-
-    return `${startTime} - ${endTime}`;
+    return `${start.toLocaleTimeString("en-US", options)} - ${end.toLocaleTimeString("en-US", options)}`;
   };
 
   // Refresh dashboard data
@@ -147,7 +110,6 @@ function Dashboard() {
 
       const data = await getDashboardData();
 
-      setGoogleConnected(data.connected);
       setEvents(data.events);
     } catch (err) {
       console.error("Dashboard data fetch failed:", err);
@@ -167,8 +129,7 @@ function Dashboard() {
 
         if (cancelled) return;
 
-        setGoogleConnected(data.connected);
-        setEvents(data.events);
+          setEvents(data.events);
         setError("");
       } catch (err) {
         console.error("Dashboard data fetch failed:", err);
@@ -260,14 +221,8 @@ function Dashboard() {
             <CalendarDays size={23} />
           </div>
           <div>
-            <p>Google Calendar</p>
-            <h2 className="connection-status">
-              {loading
-                ? "Checking..."
-                : googleConnected
-                  ? "Connected"
-                  : "Not Connected"}
-            </h2>
+            <p>Saved Events</p>
+            <h2>{loading ? "..." : events.length}</h2>
           </div>
         </div>
       </div>
@@ -289,15 +244,6 @@ function Dashboard() {
           <div className="dashboard-empty">Loading your calendar events...</div>
         ) : error ? (
           <div className="dashboard-empty dashboard-error">{error}</div>
-        ) : !googleConnected ? (
-          <div className="dashboard-empty">
-            <CalendarDays size={35} />
-            <h3>Connect Google Calendar</h3>
-            <p>Connect your Google Calendar to see your upcoming meetings.</p>
-            <Link to="/calendar" className="dashboard-connect-link">
-              Go to Calendar <ArrowRight size={15} />
-            </Link>
-          </div>
         ) : upcomingEvents.length === 0 ? (
           <div className="dashboard-empty">
             <CalendarCheck size={35} />
@@ -313,7 +259,7 @@ function Dashboard() {
                 </div>
 
                 <div className="dashboard-event-info">
-                  <h3>{event.summary || "Untitled Event"}</h3>
+                  <h3>{event.title || "Untitled Event"}</h3>
 
                   <div className="dashboard-event-meta">
                     <span>
@@ -327,13 +273,8 @@ function Dashboard() {
                     </span>
 
                     <span>
-                      {event.hangoutLink ? (
-                        <Video size={14} />
-                      ) : (
-                        <MapPin size={14} />
-                      )}
-                      {event.location ||
-                        (event.hangoutLink ? "Google Meet" : "No location")}
+                      <MapPin size={14} />
+                      {event.location || "No location"}
                     </span>
                   </div>
                 </div>
