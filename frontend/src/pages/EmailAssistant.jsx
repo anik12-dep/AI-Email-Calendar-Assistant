@@ -1,555 +1,360 @@
 import { useState, useEffect, useCallback } from "react";
 import API from "../api";
 import {
-  Search,
-  Mail,
-  Star,
   Sparkles,
   Send,
-  Inbox,
-  Archive,
-  Trash2,
+  Mail,
   RefreshCw,
+  Clock,
+  FileText,
+  CheckCircle,
+  AlertCircle,
 } from "lucide-react";
 
 function EmailAssistant() {
-  const [emails, setEmails] = useState([]);
-  const [activeFolder, setActiveFolder] = useState("inbox");
-  const [activeCategory, setActiveCategory] = useState("Primary");
-  const [selectedEmail, setSelectedEmail] = useState(null);
-  const [search, setSearch] = useState("");
-  const [showAI, setShowAI] = useState(false);
-  const [aiSummary, setAiSummary] = useState("");
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState("");
-  const [showReply, setShowReply] = useState(false);
-  const [replyInstruction, setReplyInstruction] = useState("");
-  const [replyTone, setReplyTone] = useState("Professional");
-  const [generatedReply, setGeneratedReply] = useState("");
-  const [replyLoading, setReplyLoading] = useState(false);
-  const [replyError, setReplyError] = useState("");
-  const [sendLoading, setSendLoading] = useState(false);
-  const [sendError, setSendError] = useState("");
-  const [sendSuccess, setSendSuccess] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [prompt, setPrompt] = useState("");
+  const [recipientInput, setRecipientInput] = useState("");
+  const [draft, setDraft] = useState(null);
+
+  const [generating, setGenerating] = useState(false);
+  const [sending, setSending] = useState(false);
+
   const [error, setError] = useState("");
-  const categories = ["Primary", "Social", "Promotions", "Updates"];
+  const [success, setSuccess] = useState("");
 
-  const fetchEmails = useCallback(async () => {
-    try {
-      const response = await API.get(
-        `/gmail/messages?category=${activeFolder}&max_results=20`,
-      );
+  const [sentEmails, setSentEmails] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState("");
+  const [selectedSentEmail, setSelectedSentEmail] = useState(null);
 
-      const formattedEmails = response.data.emails.map((email) => ({
-        ...email,
-        sender:
-          email.sender.split("<")[0].replace(/"/g, "").trim() || email.sender,
-        email: email.sender.match(/<(.+)>/)?.[1] || email.sender,
-        preview: email.snippet || "",
-        time: email.date || "",
-        category: "Primary",
-      }));
-
-      setEmails(formattedEmails);
-
-      setSelectedEmail(formattedEmails.length > 0 ? formattedEmails[0] : null);
-
-      setError("");
-    } catch (err) {
-      console.error("Gmail fetch error:", err);
-      setError(err.response?.data?.detail || "Failed to load Gmail messages.");
-    } finally {
-      setLoading(false);
-    }
-  }, [activeFolder]);
-
-  const handleSummarize = async () => {
-    if (!selectedEmail) return;
-
-    if (showAI) {
-      setShowAI(false);
-      return;
-    }
-
-    setShowAI(true);
-    setAiSummary("");
-    setSummaryError("");
-    setSummaryLoading(true);
+  const fetchSentEmails = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError("");
 
     try {
-      const response = await API.post("/email/summarize", {
-        email_text: selectedEmail.body || selectedEmail.preview || "",
-      });
-
-      setAiSummary(response.data.summary);
+      const response = await API.get("/email/sent");
+      setSentEmails(response.data.emails || []);
     } catch (err) {
-      console.error("AI Summary Error:", err);
-
-      setSummaryError(
-        err.response?.data?.detail ||
-          "Failed to generate AI summary. Please try again.",
+      setHistoryError(
+        err.response?.data?.detail || "Could not load sent email history."
       );
     } finally {
-      setSummaryLoading(false);
+      setHistoryLoading(false);
     }
-  };
-  const handleGenerateReply = async () => {
-    if (!selectedEmail) return;
-
-    if (!replyInstruction.trim()) {
-      setReplyError("Please enter your reply instruction.");
-      return;
-    }
-
-    setReplyLoading(true);
-    setReplyError("");
-    setGeneratedReply("");
-
-    try {
-      const response = await API.post("/email/reply", {
-        received_email: selectedEmail.body || selectedEmail.preview || "",
-        reply_instruction: replyInstruction,
-        tone: replyTone,
-      });
-
-      setGeneratedReply(response.data.reply);
-    } catch (err) {
-      console.error("AI Reply Error:", err);
-
-      setReplyError(
-        err.response?.data?.detail ||
-          "Failed to generate AI reply. Please try again.",
-      );
-    } finally {
-      setReplyLoading(false);
-    }
-  };
-  const handleSendReply = async () => {
-    if (!selectedEmail || !generatedReply.trim()) {
-      setSendError("Please generate a reply before sending.");
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Are you sure you want to send this reply to ${selectedEmail.email}?`,
-    );
-
-    if (!confirmed) return;
-
-    setSendLoading(true);
-    setSendError("");
-    setSendSuccess("");
-
-    try {
-      const response = await API.post("/gmail/reply", {
-        message_id: selectedEmail.id,
-        reply_body: generatedReply,
-      });
-
-      setSendSuccess(response.data.message || "Reply sent successfully!");
-
-      setGeneratedReply("");
-    } catch (err) {
-      console.error("Gmail Send Reply Error:", err);
-
-      setSendError(
-        err.response?.data?.detail || "Failed to send reply. Please try again.",
-      );
-    } finally {
-      setSendLoading(false);
-    }
-  };
+  }, []);
 
   useEffect(() => {
-    let isActive = true;
+    fetchSentEmails();
+  }, [fetchSentEmails]);
 
-    const loadEmails = async () => {
-      if (isActive) {
-        await fetchEmails();
+  const handleGenerate = async () => {
+    if (!prompt.trim()) {
+      setError("Please describe the email you want to write.");
+      return;
+    }
+
+    setGenerating(true);
+    setError("");
+    setSuccess("");
+    setDraft(null);
+
+    try {
+      const response = await API.post("/email/compose", {
+        prompt: prompt.trim(),
+        recipient_email: recipientInput.trim(),
+      });
+
+      if (response.data.recipient_required) {
+        setError("Please enter the recipient's email address below.");
+        return;
       }
-    };
 
-    const timeoutId = setTimeout(loadEmails, 0);
+      setDraft({
+        recipient_email: response.data.recipient_email,
+        subject: response.data.subject,
+        body: response.data.body,
+      });
 
-    return () => {
-      isActive = false;
-      clearTimeout(timeoutId);
-    };
-  }, [fetchEmails]);
+      setRecipientInput(response.data.recipient_email);
+    } catch (err) {
+      setError(
+        err.response?.data?.detail || "Email generation failed. Please try again."
+      );
+    } finally {
+      setGenerating(false);
+    }
+  };
 
-  const filteredEmails = emails.filter((email) => {
-    const matchesCategory = email.category === activeCategory;
+  const handleSend = async () => {
+    if (!draft) return;
 
-    const matchesSearch =
-      email.sender.toLowerCase().includes(search.toLowerCase()) ||
-      email.subject.toLowerCase().includes(search.toLowerCase());
+    if (
+      !window.confirm(
+        `Are you sure you want to send this email to ${draft.recipient_email}?`
+      )
+    ) {
+      return;
+    }
 
-    return matchesCategory && matchesSearch;
-  });
+    setSending(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const response = await API.post("/email/send", {
+        recipient_email: draft.recipient_email,
+        subject: draft.subject,
+        body: draft.body,
+      });
+
+      setSuccess(response.data.message || "Email sent successfully!");
+      setDraft(null);
+      setPrompt("");
+      setRecipientInput("");
+      await fetchSentEmails();
+    } catch (err) {
+      setError(
+        err.response?.data?.detail || "Failed to send email. Please try again."
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return "";
+    return new Date(dateString).toLocaleString();
+  };
+
   return (
-    <div className="email-page">
+    <div className="email-page ai-compose-page">
       <div className="email-header">
         <div>
-          <p className="welcome-text">EMAIL MANAGEMENT</p>
+          <p className="welcome-text">AI POWERED EMAIL</p>
           <h1>Email Assistant</h1>
           <p className="dashboard-subtitle">
-            Manage your inbox with the power of AI.
+            Describe your email. Let AI write it. Review and send it.
           </p>
         </div>
 
-        <button className="connect-gmail" disabled>
-          <Mail size={17} />
-          Gmail Integration Coming Soon
-        </button>
-      </div>
-
-      <div className="email-toolbar">
-        <div className="email-search">
-          <Search size={18} />
-          <input
-            type="text"
-            placeholder="Search emails..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+        <div className="email-service-status">
+          <Mail size={18} />
+          <span>SMTP Email Service</span>
         </div>
-
-        <button
-          className="refresh-button"
-          onClick={() => {
-            setSearch("");
-            setLoading(true);
-            fetchEmails();
-          }}
-        >
-          <RefreshCw size={17} />
-          Reset
-        </button>
       </div>
 
-      <div className="email-workspace">
-        <aside className="email-sidebar">
+      <div className="ai-email-layout">
+        <section className="ai-compose-panel">
+          <div className="ai-panel-heading">
+            <div className="ai-heading-icon">
+              <Sparkles size={21} />
+            </div>
+            <div>
+              <h2>Compose with AI</h2>
+              <p>Tell AI what kind of email you want to send.</p>
+            </div>
+          </div>
+
+          <label className="ai-field-label" htmlFor="email-prompt">
+            Your instruction
+          </label>
+
+          <textarea
+            id="email-prompt"
+            className="ai-email-input ai-prompt-input"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="Example: Send a professional email to rahim@gmail.com. Tell him that our project meeting is scheduled for tomorrow at 10 AM."
+            rows={5}
+          />
+
+          <label className="ai-field-label" htmlFor="recipient-email">
+            Recipient email address
+          </label>
+
+          <input
+            id="recipient-email"
+            className="ai-email-input"
+            type="email"
+            value={recipientInput}
+            onChange={(e) => setRecipientInput(e.target.value)}
+            placeholder="recipient@example.com"
+          />
+
           <button
-            className={
-              activeFolder === "inbox" ? "email-folder active" : "email-folder"
-            }
-            onClick={() => {
-              if (activeFolder !== "inbox") {
-                setActiveFolder("inbox");
-                setLoading(true);
-                setShowAI(false);
-                setShowReply(false);
-                setGeneratedReply("");
-              }
-            }}
+            className="ai-generate-email-button"
+            onClick={handleGenerate}
+            disabled={generating || !prompt.trim()}
           >
-            <Inbox size={18} />
-            Inbox
+            <Sparkles size={18} />
+            {generating ? "Generating Email..." : "Generate Email"}
           </button>
 
-          <button
-            className={
-              activeFolder === "sent" ? "email-folder active" : "email-folder"
-            }
-            onClick={() => {
-              if (activeFolder !== "sent") {
-                setActiveFolder("sent");
-                setLoading(true);
-                setShowAI(false);
-                setShowReply(false);
-                setGeneratedReply("");
-              }
-            }}
-          >
-            <Send size={18} />
-            Sent
-          </button>
-
-          <button className="email-folder">
-            <Star size={18} />
-            Starred
-          </button>
-
-          <button className="email-folder">
-            <Archive size={18} />
-            Archived
-          </button>
-
-          <button className="email-folder">
-            <Trash2 size={18} />
-            Trash
-          </button>
-
-          <div className="ai-email-card">
-            <Sparkles size={22} />
-            <h3>AI Email Assistant</h3>
-            <p>Let AI summarize and help you reply to emails.</p>
-          </div>
-        </aside>
-
-        <section className="email-list-panel">
-          <div className="email-list-heading">
-            <h3>Inbox</h3>
-            <span>{filteredEmails.length} emails</span>
-          </div>
-
-          <div className="email-categories">
-            {categories.map((category) => (
-              <button
-                key={category}
-                className={
-                  activeCategory === category ? "category active" : "category"
-                }
-                onClick={() => setActiveCategory(category)}
-              >
-                {category}
-              </button>
-            ))}
-          </div>
-
-          {loading ? (
-            <p className="empty-emails">Loading your Gmail messages...</p>
-          ) : error ? (
-            <p className="empty-emails">{error}</p>
-          ) : filteredEmails.length > 0 ? (
-            filteredEmails.map((email) => (
-              <button
-                key={email.id}
-                className={
-                  selectedEmail?.id === email.id
-                    ? "email-item selected"
-                    : "email-item"
-                }
-                onClick={() => {
-                  setSelectedEmail(email);
-                  setShowAI(false);
-                  setAiSummary("");
-                  setSummaryError("");
-
-                  setShowReply(false);
-                  setReplyInstruction("");
-                  setGeneratedReply("");
-                  setReplyError("");
-                }}
-              >
-                <div className="email-avatar">{email.sender.charAt(0)}</div>
-
-                <div className="email-item-content">
-                  <div className="email-item-top">
-                    <strong>{email.sender}</strong>
-                    <span>{email.time}</span>
-                  </div>
-
-                  <p>{email.subject}</p>
-                  <span className="email-preview">{email.preview}</span>
-                </div>
-
-                {email.unread && <span className="unread-dot" />}
-              </button>
-            ))
-          ) : (
-            <p className="empty-emails">No emails found.</p>
+          {error && (
+            <div className="ai-email-alert error">
+              <AlertCircle size={18} />
+              <span>{error}</span>
+            </div>
           )}
+
+          {success && (
+            <div className="ai-email-alert success">
+              <CheckCircle size={18} />
+              <span>{success}</span>
+            </div>
+          )}
+
+          <div className="ai-compose-note">
+            <AlertCircle size={17} />
+            <p>
+              AI will only prepare a draft. No email is sent until you review
+              it and click Send Email.
+            </p>
+          </div>
         </section>
 
-        <section className="email-detail-panel">
-          {selectedEmail ? (
-            <>
-              <div className="email-detail-header">
-                <div>
-                  <h2>{selectedEmail.subject}</h2>
-                  <p>{selectedEmail.sender}</p>
-                  <span>{selectedEmail.email}</span>
-                </div>
+        <section className="ai-preview-panel">
+          <div className="ai-panel-heading">
+            <div className="ai-heading-icon preview-icon">
+              <FileText size={21} />
+            </div>
+            <div>
+              <h2>Email Preview</h2>
+              <p>Review and edit your email before sending.</p>
+            </div>
+          </div>
 
-                <button className="icon-button">
-                  <Star size={19} />
-                </button>
+          {draft ? (
+            <div className="ai-email-draft">
+              <div className="ai-draft-field">
+                <label htmlFor="draft-recipient">To</label>
+                <input
+                  id="draft-recipient"
+                  type="email"
+                  value={draft.recipient_email}
+                  onChange={(e) =>
+                    setDraft({ ...draft, recipient_email: e.target.value })
+                  }
+                />
               </div>
 
-              <div className="email-message">
-                <div className="email-sender-avatar">
-                  {selectedEmail.sender.charAt(0)}
-                </div>
-
-                <div>
-                  <strong>{selectedEmail.sender}</strong>
-                  <p className="message-time">{selectedEmail.time}</p>
-                </div>
+              <div className="ai-draft-field">
+                <label htmlFor="draft-subject">Subject</label>
+                <input
+                  id="draft-subject"
+                  value={draft.subject}
+                  onChange={(e) =>
+                    setDraft({ ...draft, subject: e.target.value })
+                  }
+                />
               </div>
 
-              <div
-                className="email-body"
-                style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+              <div className="ai-draft-field">
+                <label htmlFor="draft-body">Message</label>
+                <textarea
+                  id="draft-body"
+                  rows={12}
+                  value={draft.body}
+                  onChange={(e) =>
+                    setDraft({ ...draft, body: e.target.value })
+                  }
+                />
+              </div>
+
+              <button
+                className="ai-send-email-button"
+                onClick={handleSend}
+                disabled={
+                  sending ||
+                  !draft.recipient_email.trim() ||
+                  !draft.subject.trim() ||
+                  !draft.body.trim()
+                }
               >
-                {selectedEmail.body ||
-                  selectedEmail.preview ||
-                  "No email content available."}
-              </div>
-
-              <div className="email-ai-actions">
-                <button
-                  className="ai-summary-button"
-                  onClick={handleSummarize}
-                  disabled={summaryLoading}
-                >
-                  <Sparkles size={17} />
-                  {summaryLoading
-                    ? "Generating Summary..."
-                    : showAI
-                      ? "Hide AI Summary"
-                      : "AI Summary"}
-                </button>
-
-                <button
-                  className="reply-button"
-                  onClick={() => {
-                    setShowReply(!showReply);
-                    setReplyError("");
-                  }}
-                >
-                  <Send size={16} />
-                  {showReply ? "Close AI Reply" : "AI Reply"}
-                </button>
-              </div>
-
-              {showReply && (
-                <div
-                  className="ai-summary-result"
-                  style={{ marginTop: "16px", display: "block" }}
-                >
-                  <div>
-                    <strong>AI Email Reply</strong>
-
-                    <p style={{ marginTop: "12px" }}>Reply Instruction</p>
-
-                    <textarea
-                      value={replyInstruction}
-                      onChange={(e) => setReplyInstruction(e.target.value)}
-                      placeholder="Example: Thank them for the information and confirm my attendance."
-                      rows={3}
-                      style={{
-                        width: "100%",
-                        padding: "12px",
-                        borderRadius: "8px",
-                        resize: "vertical",
-                        boxSizing: "border-box",
-                        fontFamily: "inherit",
-                      }}
-                    />
-
-                    <p style={{ marginTop: "12px" }}>Reply Tone</p>
-
-                    <select
-                      value={replyTone}
-                      onChange={(e) => setReplyTone(e.target.value)}
-                      style={{
-                        width: "100%",
-                        padding: "10px",
-                        borderRadius: "8px",
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      <option value="Professional">Professional</option>
-                      <option value="Friendly">Friendly</option>
-                      <option value="Formal">Formal</option>
-                      <option value="Casual">Casual</option>
-                    </select>
-
-                    <button
-                      className="ai-summary-button"
-                      onClick={handleGenerateReply}
-                      disabled={replyLoading}
-                      style={{ marginTop: "14px" }}
-                    >
-                      <Sparkles size={16} />
-                      {replyLoading
-                        ? "Generating Reply..."
-                        : "Generate AI Reply"}
-                    </button>
-
-                    {replyError && (
-                      <p style={{ color: "red", marginTop: "12px" }}>
-                        {replyError}
-                      </p>
-                    )}
-
-                    {generatedReply && (
-                      <div style={{ marginTop: "16px" }}>
-                        <strong>Generated Reply</strong>
-
-                        <textarea
-                          value={generatedReply}
-                          onChange={(e) => {
-                            setGeneratedReply(e.target.value);
-                            setSendSuccess("");
-                            setSendError("");
-                          }}
-                          rows={8}
-                          style={{
-                            width: "100%",
-                            padding: "12px",
-                            marginTop: "10px",
-                            borderRadius: "8px",
-                            resize: "vertical",
-                            boxSizing: "border-box",
-                            fontFamily: "inherit",
-                          }}
-                        />
-
-                        <button
-                          className="reply-button"
-                          onClick={handleSendReply}
-                          disabled={sendLoading || !generatedReply.trim()}
-                          style={{ marginTop: "14px" }}
-                        >
-                          <Send size={16} />
-                          {sendLoading ? "Sending Reply..." : "Send Reply"}
-                        </button>
-
-                        {sendError && (
-                          <p style={{ color: "red", marginTop: "12px" }}>
-                            {sendError}
-                          </p>
-                        )}
-
-                        {sendSuccess && (
-                          <p style={{ color: "green", marginTop: "12px" }}>
-                            {sendSuccess}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {showAI && (
-                <div className="ai-summary-result">
-                  <Sparkles size={18} />
-
-                  <div>
-                    <strong>AI Email Summary</strong>
-
-                    {summaryLoading ? (
-                      <p>AI is analyzing your email. Please wait...</p>
-                    ) : summaryError ? (
-                      <p>{summaryError}</p>
-                    ) : (
-                      <p style={{ whiteSpace: "pre-wrap" }}>{aiSummary}</p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </>
+                <Send size={17} />
+                {sending ? "Sending Email..." : "Send Email"}
+              </button>
+            </div>
           ) : (
-            <div className="empty-emails">
-              Select an email to view its details.
+            <div className="ai-empty-preview">
+              <div className="ai-empty-icon">
+                <Mail size={34} />
+              </div>
+              <h3>Your email draft will appear here</h3>
+              <p>
+                Write your instruction and click Generate Email to create your
+                first AI email draft.
+              </p>
             </div>
           )}
         </section>
       </div>
+
+      <section className="ai-sent-history">
+        <div className="ai-history-heading">
+          <div>
+            <h2>
+              <Clock size={20} />
+              Sent Email History
+            </h2>
+            <p>Your recently sent emails.</p>
+          </div>
+
+          <button
+            className="ai-history-refresh"
+            onClick={fetchSentEmails}
+            disabled={historyLoading}
+          >
+            <RefreshCw size={16} />
+            Refresh
+          </button>
+        </div>
+
+        {historyLoading ? (
+          <p className="ai-history-empty">Loading sent emails...</p>
+        ) : historyError ? (
+          <p className="ai-history-empty">{historyError}</p>
+        ) : sentEmails.length === 0 ? (
+          <div className="ai-history-empty">
+            <Mail size={27} />
+            <p>No sent emails yet. Your sent emails will appear here.</p>
+          </div>
+        ) : (
+          <div className="ai-history-list">
+            {sentEmails.map((email) => (
+              <button
+                key={email.id}
+                className={
+                  selectedSentEmail?.id === email.id
+                    ? "ai-history-item selected"
+                    : "ai-history-item"
+                }
+                onClick={() =>
+                  setSelectedSentEmail(
+                    selectedSentEmail?.id === email.id ? null : email
+                  )
+                }
+              >
+                <div className="ai-history-avatar">
+                  <Mail size={18} />
+                </div>
+
+                <div className="ai-history-content">
+                  <strong>{email.subject}</strong>
+                  <span>To: {email.recipient_email}</span>
+                  <small>{formatDate(email.sent_at)}</small>
+
+                  {selectedSentEmail?.id === email.id && (
+                    <div className="ai-history-detail">
+                      <p>{email.body}</p>
+                    </div>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

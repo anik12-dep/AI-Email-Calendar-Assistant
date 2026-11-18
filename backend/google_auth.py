@@ -15,14 +15,27 @@ from user_store import (
     save_user_credentials,
     load_user_credentials,
     get_user_email,
+    get_user_sub_by_email,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-GOOGLE_REDIRECT_URI_ENV = os.getenv("GOOGLE_REDIRECT_URI", "")
+OWNER_EMAIL = "anikmoy333@gmail.com"
 
-if GOOGLE_REDIRECT_URI_ENV.startswith(
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+FRONTEND_URL = os.getenv(
+    "FRONTEND_URL",
+    "http://localhost:5173"
+).rstrip("/")
+
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+
+# Allow Google to return previously granted additional scopes.
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+
+if GOOGLE_REDIRECT_URI and GOOGLE_REDIRECT_URI.startswith(
     ("http://localhost", "http://127.0.0.1")
 ):
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
@@ -34,20 +47,9 @@ router = APIRouter()
 SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
 ]
-
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
-
-FRONTEND_URL = os.getenv(
-    "FRONTEND_URL",
-    "http://localhost:5173"
-).rstrip("/")
 
 
 def get_google_flow(state=None):
@@ -104,7 +106,7 @@ def google_login():
 
     return {
         "authorization_url": authorization_url,
-        "message": "Open authorization_url to connect your Google account."
+        "message": "Authorize the shared Google account."
     }
 
 
@@ -115,28 +117,22 @@ def google_callback(request: Request, state: str):
     if not code_verifier:
         raise HTTPException(
             status_code=400,
-            detail="Invalid or expired OAuth state. Please login again."
+            detail="Invalid or expired OAuth state. Please try again."
         )
 
-    phase = "initialization"
-
     try:
-        phase = "google_flow_creation"
         flow = get_google_flow(state=state)
         flow.code_verifier = code_verifier
 
-        phase = "google_token_exchange"
         flow.fetch_token(
             authorization_response=str(request.url)
         )
 
         credentials = flow.credentials
 
-        phase = "identity_token_check"
         if not credentials.id_token:
             raise ValueError("Google did not return an identity token.")
 
-        phase = "identity_verification"
         identity = id_token.verify_oauth2_token(
             credentials.id_token,
             GoogleRequest(),
@@ -146,17 +142,25 @@ def google_callback(request: Request, state: str):
         google_sub = identity.get("sub")
         email = identity.get("email")
 
-        if not google_sub or not email or not identity.get("email_verified"):
+        if (
+            not google_sub
+            or not email
+            or not identity.get("email_verified")
+        ):
             raise ValueError("Google account identity could not be verified.")
 
-        phase = "credential_storage"
+        if email.lower() != OWNER_EMAIL.lower():
+            raise HTTPException(
+                status_code=403,
+                detail="Only the configured shared Google account can authorize this application."
+            )
+
         save_user_credentials(
             google_sub=google_sub,
             email=email,
             credentials=credentials
         )
 
-        phase = "session_creation"
         request.session.clear()
         request.session["user_id"] = google_sub
         request.session["user_email"] = email
@@ -165,15 +169,12 @@ def google_callback(request: Request, state: str):
             url=f"{FRONTEND_URL}/calendar?google_connected=true"
         )
 
+    except HTTPException:
+        raise
     except Exception as exc:
-        warning_detail = (
-            str(exc)[:500] if isinstance(exc, Warning)
-            else "Not a Warning"
-        )
         print(
-            f"[GOOGLE AUTH DEBUG] phase={phase} "
-            f"error_type={type(exc).__name__} "
-            f"warning_detail={warning_detail}"
+            f"[GOOGLE AUTH ERROR] "
+            f"type={type(exc).__name__} detail={str(exc)[:300]}"
         )
         raise HTTPException(
             status_code=400,
@@ -185,7 +186,7 @@ def get_google_credentials(user_id: str):
     if not user_id:
         raise HTTPException(
             status_code=401,
-            detail="Authentication required. Please connect your Google account."
+            detail="Google account is not connected."
         )
 
     try:
@@ -194,7 +195,7 @@ def get_google_credentials(user_id: str):
         if not credential_data:
             raise HTTPException(
                 status_code=401,
-                detail="Google account is not connected. Please connect again."
+                detail="Google account is not connected. Please authorize it."
             )
 
         credentials = Credentials.from_authorized_user_info(
@@ -211,7 +212,7 @@ def get_google_credentials(user_id: str):
                 if not email:
                     raise HTTPException(
                         status_code=401,
-                        detail="Google account not found. Please connect again."
+                        detail="Google account not found."
                     )
 
                 save_user_credentials(
@@ -222,7 +223,7 @@ def get_google_credentials(user_id: str):
             else:
                 raise HTTPException(
                     status_code=401,
-                    detail="Google credentials expired. Please connect again."
+                    detail="Google credentials expired. Please authorize again."
                 )
 
         return credentials
@@ -232,18 +233,29 @@ def get_google_credentials(user_id: str):
     except Exception:
         raise HTTPException(
             status_code=401,
-            detail="Could not load Google credentials. Please reconnect your Google account."
+            detail="Could not load Google credentials."
         )
 
 
+def get_shared_google_credentials():
+    google_sub = get_user_sub_by_email(OWNER_EMAIL)
+
+    if not google_sub:
+        raise HTTPException(
+            status_code=401,
+            detail="Shared Google account has not been authorized yet."
+        )
+
+    return get_google_credentials(google_sub)
+
+
 @router.get("/auth/google/status")
-def google_status(request: Request):
-    user_id = request.session.get("user_id")
-    email = get_user_email(user_id) if user_id else None
+def google_status():
+    google_sub = get_user_sub_by_email(OWNER_EMAIL)
 
     return {
-        "connected": bool(user_id and email),
-        "email": email
+        "connected": bool(google_sub),
+        "email": OWNER_EMAIL if google_sub else None
     }
 
 
@@ -253,13 +265,7 @@ def require_authenticated_session(request: Request):
     if not user_id:
         raise HTTPException(
             status_code=401,
-            detail="Authentication required. Please connect your Google account."
+            detail="Authentication required."
         )
 
     return user_id
-
-
-@router.post("/auth/google/logout")
-def google_logout(request: Request):
-    request.session.clear()
-    return {"message": "Logged out successfully"}

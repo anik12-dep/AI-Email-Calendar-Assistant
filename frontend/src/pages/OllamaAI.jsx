@@ -51,6 +51,7 @@ function OllamaAI() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(false);
+  const [sendingInvitationIndex, setSendingInvitationIndex] = useState(null);
 
   const messagesEndRef = useRef(null);
   const [copiedCode, setCopiedCode] = useState("");
@@ -112,6 +113,13 @@ function OllamaAI() {
 
     if (!message || loading || !connected) return;
 
+    const history = messages
+      .filter((item) => item.role === "user" || item.role === "assistant")
+      .map((item) => ({
+        role: item.role,
+        content: item.content,
+      }));
+
     setMessages((previous) => [
       ...previous,
       { role: "user", content: message },
@@ -124,13 +132,21 @@ function OllamaAI() {
     try {
       const response = await API.post("/chat", {
         message,
+        history,
       });
+
+      console.log("CHAT API RESPONSE:", response.data);
 
       setMessages((previous) => [
         ...previous,
         {
           role: "assistant",
           content: response.data.response,
+          intent: response.data.intent,
+          invitation: response.data.invitation,
+          email: response.data.email,
+          missing_fields: response.data.missing_fields,
+          ready_for_confirmation: response.data.ready_for_confirmation,
         },
       ]);
     } catch (err) {
@@ -141,6 +157,107 @@ function OllamaAI() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const confirmInvitation = async (message, index) => {
+    if (
+      !message.invitation ||
+      message.ready_for_confirmation !== true ||
+      message.invitation_status ||
+      sendingInvitationIndex !== null
+    ) {
+      return;
+    }
+
+    setSendingInvitationIndex(index);
+    setError("");
+
+    try {
+      const response = await API.post(
+        "/calendar/send-public-invitation",
+        message.invitation
+      );
+
+      setMessages((previous) =>
+        previous.map((item, itemIndex) =>
+          itemIndex === index
+            ? {
+                ...item,
+                invitation_status: "sent",
+                event_link: response.data.event_link || "",
+              }
+            : item
+        )
+      );
+    } catch (err) {
+      setError(
+        err.response?.data?.detail ||
+          "Could not send the calendar invitation. Please try again."
+      );
+    } finally {
+      setSendingInvitationIndex(null);
+    }
+  };
+
+  const confirmEmail = async (message, index) => {
+    if (
+      !message.email ||
+      message.ready_for_confirmation !== true ||
+      message.email_status ||
+      sendingInvitationIndex !== null
+    ) {
+      return;
+    }
+
+    setSendingInvitationIndex(index);
+    setError("");
+
+    try {
+      const response = await API.post("/email/send", {
+        recipient_email: message.email.recipient_email,
+        subject: message.email.subject,
+        body: message.email.body,
+      });
+
+      setMessages((previous) =>
+        previous.map((item, itemIndex) =>
+          itemIndex === index
+            ? {
+                ...item,
+                email_status: "sent",
+                email_sender: response.data.sender_email || "",
+              }
+            : item
+        )
+      );
+    } catch (err) {
+      setError(
+        err.response?.data?.detail ||
+          "Could not send the email. Please try again."
+      );
+    } finally {
+      setSendingInvitationIndex(null);
+    }
+  };
+
+  const cancelEmail = (index) => {
+    setMessages((previous) =>
+      previous.map((item, itemIndex) =>
+        itemIndex === index
+          ? { ...item, email_status: "cancelled" }
+          : item
+      )
+    );
+  };
+
+  const cancelInvitation = (index) => {
+    setMessages((previous) =>
+      previous.map((item, itemIndex) =>
+        itemIndex === index
+          ? { ...item, invitation_status: "cancelled" }
+          : item
+      )
+    );
   };
 
   const handleKeyDown = (event) => {
@@ -334,6 +451,158 @@ function OllamaAI() {
                       {message.content}
                     </ReactMarkdown>
                   </div>
+
+                  {message.intent === "calendar_invitation" &&
+                    message.invitation && (
+                      <div className="ollama-invitation-card">
+                        <div className="ollama-invitation-heading">
+                          <strong>📅 Calendar Invitation Preview</strong>
+                        </div>
+
+                        {message.invitation_status === "sent" ? (
+                          <div className="ollama-invitation-success">
+                            Invitation sent successfully!
+                            {message.event_link && (
+                              <a
+                                href={message.event_link}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open Google Calendar Event
+                              </a>
+                            )}
+                          </div>
+                        ) : message.invitation_status === "cancelled" ? (
+                          <p className="ollama-invitation-cancelled">
+                            Invitation cancelled. Nothing was sent.
+                          </p>
+                        ) : message.ready_for_confirmation === true ? (
+                          <>
+                            <div className="ollama-invitation-details">
+                              <p><strong>Title:</strong> {message.invitation.title}</p>
+                              <p><strong>Recipient:</strong> {message.invitation.recipient_email}</p>
+                              <p>
+                                <strong>Start:</strong>{" "}
+                                {new Date(message.invitation.start_time).toLocaleString(
+                                  "en-BD",
+                                  { timeZone: "Asia/Dhaka" }
+                                )}
+                              </p>
+                              <p>
+                                <strong>End:</strong>{" "}
+                                {new Date(message.invitation.end_time).toLocaleString(
+                                  "en-BD",
+                                  { timeZone: "Asia/Dhaka" }
+                                )}
+                              </p>
+                              {message.invitation.location && (
+                                <p><strong>Location:</strong> {message.invitation.location}</p>
+                              )}
+                              {message.invitation.description && (
+                                <p><strong>Description:</strong> {message.invitation.description}</p>
+                              )}
+                            </div>
+
+                            <div className="ollama-invitation-actions">
+                              <button
+                                type="button"
+                                className="ollama-invitation-confirm"
+                                onClick={() => confirmInvitation(message, index)}
+                                disabled={sendingInvitationIndex !== null}
+                              >
+                                {sendingInvitationIndex === index
+                                  ? "Sending..."
+                                  : "Confirm & Send"}
+                              </button>
+
+                              <button
+                                type="button"
+                                className="ollama-invitation-cancel"
+                                onClick={() => cancelInvitation(index)}
+                                disabled={sendingInvitationIndex !== null}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <p>Please provide the missing meeting details in the chat.</p>
+                        )}
+                      </div>
+                    )}
+                  {message.role === "assistant" && (
+                    <pre style={{ fontSize: "12px", color: "#16a34a", whiteSpace: "pre-wrap" }}>
+                      {JSON.stringify({
+                        intent: message.intent,
+                        email: message.email,
+                        ready_for_confirmation: message.ready_for_confirmation
+                      }, null, 2)}
+                    </pre>
+                  )}
+
+                  {message.intent === "email_draft" && message.email && (
+                    <div className="ollama-invitation-card ollama-email-card">
+                      <div className="ollama-invitation-heading">
+                        <strong>✉️ Email Preview</strong>
+                      </div>
+
+                      {message.email_status === "sent" ? (
+                        <div className="ollama-invitation-success">
+                          Email sent successfully!
+                          {message.email_sender && (
+                            <span>Sent from: {message.email_sender}</span>
+                          )}
+                        </div>
+                      ) : message.email_status === "cancelled" ? (
+                        <p className="ollama-invitation-cancelled">
+                          Email cancelled. Nothing was sent.
+                        </p>
+                      ) : message.ready_for_confirmation === true ? (
+                        <>
+                          <div className="ollama-invitation-details">
+                            <p>
+                              <strong>To:</strong>{" "}
+                              {message.email.recipient_email}
+                            </p>
+                            <p>
+                              <strong>Subject:</strong>{" "}
+                              {message.email.subject}
+                            </p>
+                            <p>
+                              <strong>Message:</strong>
+                            </p>
+                            <div className="ollama-email-body">
+                              {message.email.body}
+                            </div>
+                          </div>
+
+                          <div className="ollama-invitation-actions">
+                            <button
+                              type="button"
+                              className="ollama-invitation-confirm"
+                              onClick={() => confirmEmail(message, index)}
+                              disabled={sendingInvitationIndex !== null}
+                            >
+                              {sendingInvitationIndex === index
+                                ? "Sending..."
+                                : "Confirm & Send"}
+                            </button>
+
+                            <button
+                              type="button"
+                              className="ollama-invitation-cancel"
+                              onClick={() => cancelEmail(index)}
+                              disabled={sendingInvitationIndex !== null}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <p>Please provide the missing email details in the chat.</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ))

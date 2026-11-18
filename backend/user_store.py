@@ -192,3 +192,13 @@ def get_user_email(google_sub: str):
 
 
 initialize_db()
+
+
+def get_user_sub_by_email(email: str):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT google_sub FROM users WHERE email = ? COLLATE NOCASE",
+            (email,)
+        ).fetchone()
+
+    return row["google_sub"] if row else None

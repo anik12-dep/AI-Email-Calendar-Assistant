@@ -692,3 +692,129 @@
   font-size: 13px;
   line-height: 1.7;
 }
+
+/* Calendar Invitation Preview */
+
+.ollama-invitation-card {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  background: #f8fafc;
+  color: #1e293b;
+}
+
+.ollama-invitation-heading {
+  margin-bottom: 14px;
+  font-size: 15px;
+}
+
+.ollama-invitation-details p {
+  margin: 9px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.ollama-invitation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.ollama-invitation-actions button {
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ollama-invitation-confirm {
+  border: none;
+  background: #2563eb;
+  color: white;
+}
+
+.ollama-invitation-confirm:hover {
+  background: #1d4ed8;
+}
+
+.ollama-invitation-cancel {
+  border: 1px solid #cbd5e1;
+  background: transparent;
+  color: #475569;
+}
+
+.ollama-invitation-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ollama-invitation-success {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #15803d;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ollama-invitation-success a {
+  color: #2563eb;
+  font-weight: 500;
+}
+
+.ollama-invitation-cancelled {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.dark-mode .ollama-invitation-card {
+  background: #1e293b;
+  border-color: #475569;
+  color: #e2e8f0;
+}
+
+.dark-mode .ollama-invitation-cancel {
+  color: #e2e8f0;
+  border-color: #64748b;
+}
+
+@media (max-width: 600px) {
+  .ollama-invitation-card {
+    padding: 14px;
+  }
+
+  .ollama-invitation-actions {
+    flex-direction: column;
+  }
+
+  .ollama-invitation-actions button {
+    width: 100%;
+  }
+}
+
+/* Email Preview */
+.ollama-email-card {
+  max-width: 100%;
+}
+
+.ollama-email-body {
+  margin-top: 8px;
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: rgba(148, 163, 184, 0.08);
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dark-mode .ollama-email-body {
+  border-color: #475569;
+  background: rgba(15, 23, 42, 0.45);
+}

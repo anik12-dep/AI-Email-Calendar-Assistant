@@ -28,7 +28,6 @@ function Calendar() {
   const [newEvent, setNewEvent] = useState({
     summary: "",
     description: "",
-    senderEmail: "",
     recipientEmail: "",
     date: getTodayLocal(),
     startTime: "09:00",
@@ -103,14 +102,13 @@ function Calendar() {
         start_time: startDateTime.toISOString(),
         end_time: endDateTime.toISOString(),
         location: "",
-        sender_email: newEvent.senderEmail.trim(),
         recipient_email: newEvent.recipientEmail.trim(),
       };
 
       await API.post("/calendar/send-public-invitation", payload);
 
       setCreateEventSuccess(
-        "Invitation email sent successfully! The event has been saved to your calendar.",
+        "Google Calendar invitation sent successfully! The event is now in the shared calendar.",
       );
 
       setShowCreateEvent(false);
@@ -237,17 +235,6 @@ function Calendar() {
                 onChange={(e) =>
                   setNewEvent({ ...newEvent, description: e.target.value })
                 }
-              />
-
-              <label>Sender Email</label>
-              <input
-                type="email"
-                placeholder="Your email address"
-                value={newEvent.senderEmail}
-                onChange={(e) =>
-                  setNewEvent({ ...newEvent, senderEmail: e.target.value })
-                }
-                required
               />
 
               <label>Recipient Email</label>

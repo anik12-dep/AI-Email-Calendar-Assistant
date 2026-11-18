@@ -11,7 +11,12 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from pydantic import BaseModel
 
-from google_auth import get_google_credentials, require_authenticated_session
+from google_auth import (
+    OWNER_EMAIL,
+    get_google_credentials,
+    get_shared_google_credentials,
+    require_authenticated_session,
+)
 
 router = APIRouter()
 
@@ -217,16 +222,7 @@ def send_gmail_reply(
 
 
 def get_gmail_sender_email(user_id: str):
-    try:
-        profile = get_gmail_service(user_id).users().getProfile(
-            userId="me"
-        ).execute()
-        return profile.get("emailAddress", "")
-    except HttpError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not read connected Gmail account: {error}"
-        )
+    return OWNER_EMAIL
 
 
 def send_gmail_invitation(user_id, recipient_email, title, ics_content):
@@ -289,3 +285,53 @@ def send_gmail_invitation(user_id, recipient_email, title, ics_content):
             detail=f"Gmail API could not send invitation: {error}"
         )
 
+
+
+
+def send_shared_gmail_email(recipient_email: str, subject: str, body: str):
+    """Send an email using the owner's shared Google account."""
+
+    try:
+        credentials = get_shared_google_credentials()
+
+        service = build(
+            "gmail",
+            "v1",
+            credentials=credentials,
+            cache_discovery=False
+        )
+
+        sender_email = OWNER_EMAIL
+
+        if not sender_email:
+            raise HTTPException(
+                status_code=502,
+                detail="Shared Gmail address could not be identified."
+            )
+
+        message = MIMEText(body, "plain", "utf-8")
+        message["to"] = recipient_email
+        message["from"] = sender_email
+        message["subject"] = subject
+
+        raw_message = base64.urlsafe_b64encode(
+            message.as_bytes()
+        ).decode("utf-8")
+
+        sent = service.users().messages().send(
+            userId="me",
+            body={"raw": raw_message}
+        ).execute()
+
+        return {
+            "sender_email": sender_email,
+            "message_id": sent.get("id")
+        }
+
+    except HTTPException:
+        raise
+    except HttpError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gmail API could not send email: {error}"
+        )

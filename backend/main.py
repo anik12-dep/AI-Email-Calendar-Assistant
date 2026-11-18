@@ -1,15 +1,23 @@
 import os
+import re
+import json
 import sqlite3
 import uuid
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ollama import Client
 from calendar_invitation import create_ics_file, send_invitation_email
+from email_sender import send_regular_email
+from google_gmail import send_shared_gmail_email
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
+from zoneinfo import ZoneInfo
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from google_auth import get_shared_google_credentials, router as google_auth_router
 
 # ==============================
 load_dotenv()
@@ -22,6 +30,8 @@ app = FastAPI(
     description="AI Assistant powered by FastAPI and Ollama",
     version="1.0.0"
 )
+
+app.include_router(google_auth_router)
 
 FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
@@ -112,12 +122,51 @@ def initialize_calendar_db():
     if "user_id" not in columns:
         conn.execute("ALTER TABLE events ADD COLUMN user_id TEXT")
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS guest_calendar_invitations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guest_id TEXT NOT NULL,
+            google_event_id TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            description TEXT,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            location TEXT,
+            recipient_email TEXT NOT NULL,
+            event_link TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
 
 # Initialize Calendar Database
 initialize_calendar_db()
+
+
+# ==============================
+# Sent Email History Database
+# ==============================
+
+def initialize_email_history_db():
+    conn = sqlite3.connect("email_history.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sent_emails (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            recipient_email TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            sent_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+initialize_email_history_db()
 
 
 # ==============================
@@ -130,6 +179,7 @@ class ModelRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    history: list[dict[str, str]] = Field(default_factory=list)
 
 
 class EmailGenerateRequest(BaseModel):
@@ -146,6 +196,17 @@ class EmailReplyRequest(BaseModel):
     reply_instruction: str
     tone: str = "Professional"
 
+
+class EmailComposeRequest(BaseModel):
+    prompt: str
+    recipient_email: str = ""
+
+
+class EmailSendRequest(BaseModel):
+    recipient_email: str
+    subject: str
+    body: str
+
 class CalendarEventRequest(BaseModel):
     title: str
     description: str = ""
@@ -159,7 +220,6 @@ class CalendarInvitationRequest(BaseModel):
     start_time: datetime
     end_time: datetime
     location: str = ""
-    sender_email: str
     recipient_email: str
 
 
@@ -243,19 +303,250 @@ def update_model(request: ModelRequest):
 @app.post("/chat")
 def chat(request: ChatRequest):
     try:
-        response = ollama_client.chat(
+        dhaka_now = datetime.now(ZoneInfo("Asia/Dhaka"))
+        current_date = dhaka_now.strftime("%Y-%m-%d")
+        current_time = dhaka_now.strftime("%H:%M")
+
+        system_prompt = f"""
+You are a helpful personal AI assistant that can prepare emails and calendar invitations.
+
+Current date: {current_date}
+Current time: {current_time}
+Timezone: Asia/Dhaka (UTC+06:00)
+
+Return valid JSON with exactly these keys:
+{{
+  "response": "Natural conversational response",
+  "intent": "general_chat, calendar_invitation, or email_draft",
+  "invitation": null,
+  "email": null,
+  "missing_fields": [],
+  "ready_for_confirmation": false
+}}
+
+For calendar_invitation, use:
+"invitation": {{
+  "title": "",
+  "recipient_email": "",
+  "start_time": "",
+  "end_time": "",
+  "description": "",
+  "location": ""
+}}
+"email": null
+
+For email_draft, use:
+"invitation": null,
+"email": {{
+  "recipient_email": "",
+  "subject": "",
+  "body": ""
+}}
+
+Rules:
+1. For ordinary conversation, use general_chat.
+2. For meeting or event scheduling, use calendar_invitation.
+3. For writing or sending an ordinary email, use email_draft.
+4. Extract information from the current message AND conversation history.
+5. Never invent recipient email addresses or factual details.
+6. Calendar required fields: title, recipient_email, start_time, end_time.
+7. Email required fields: recipient_email, subject, body.
+8. If email subject or body is not provided, prepare a suitable professional draft using the user's instruction. Do not invent facts.
+9. If recipient email is missing, ask the user for it.
+10. If required information is missing, list its field names in missing_fields.
+11. For calendar dates, use ISO 8601 with +06:00 timezone.
+12. If calendar end time is missing, ask the user. Never invent duration.
+13. Never send an email or create a calendar event yourself.
+14. Set ready_for_confirmation true only when all required fields are valid.
+15. Keep responses friendly, concise, and conversational.
+"""
+
+        conversation = [{"role": "system", "content": system_prompt}]
+
+        for item in request.history[-12:]:
+            role = item.get("role")
+            message_content = item.get("content")
+
+            if role in ("user", "assistant") and isinstance(message_content, str):
+                conversation.append({
+                    "role": role,
+                    "content": message_content[:4000]
+                })
+
+        conversation.append({
+            "role": "user",
+            "content": request.message
+        })
+
+        result = ollama_client.chat(
             model=selected_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": request.message
-                }
-            ]
+            messages=conversation,
+            format="json"
         )
+
+        try:
+            parsed = json.loads(result.message.content)
+        except (json.JSONDecodeError, TypeError):
+            raise ValueError("Ollama returned an invalid JSON response.")
+
+        if not isinstance(parsed, dict):
+            raise ValueError("Ollama returned an invalid response structure.")
+
+        parsed.setdefault("response", "I could not process that request. Please try again.")
+        parsed.setdefault("intent", "general_chat")
+        parsed.setdefault("invitation", None)
+        parsed.setdefault("missing_fields", [])
+        parsed.setdefault("ready_for_confirmation", False)
+
+        parsed.setdefault("email", None)
+
+        if parsed["intent"] == "calendar_invitation":
+            parsed["email"] = None
+            invitation = parsed.get("invitation")
+
+            if not isinstance(invitation, dict):
+                invitation = {}
+
+            required_fields = [
+                "title",
+                "recipient_email",
+                "start_time",
+                "end_time",
+            ]
+
+            missing_fields = []
+
+            for field in required_fields:
+                value = invitation.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    missing_fields.append(field)
+
+            # Clean recipient email from Markdown formatting
+            recipient = invitation.get("recipient_email", "")
+
+            if isinstance(recipient, str):
+                match = re.search(
+                    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+                    recipient
+                )
+                if match:
+                    recipient = match.group(0)
+                    invitation["recipient_email"] = recipient
+
+            if recipient and not re.fullmatch(
+                r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+                recipient.strip()
+            ):
+                if "recipient_email" not in missing_fields:
+                    missing_fields.append("recipient_email")
+
+            start_time = None
+            end_time = None
+
+            try:
+                if invitation.get("start_time"):
+                    start_time = datetime.fromisoformat(invitation["start_time"])
+            except (ValueError, TypeError):
+                if "start_time" not in missing_fields:
+                    missing_fields.append("start_time")
+
+            try:
+                if invitation.get("end_time"):
+                    end_time = datetime.fromisoformat(invitation["end_time"])
+            except (ValueError, TypeError):
+                if "end_time" not in missing_fields:
+                    missing_fields.append("end_time")
+
+            if (
+                start_time is not None
+                and end_time is not None
+                and end_time <= start_time
+                and "end_time" not in missing_fields
+            ):
+                missing_fields.append("end_time")
+
+            parsed["invitation"] = invitation
+            parsed["missing_fields"] = missing_fields
+            parsed["ready_for_confirmation"] = len(missing_fields) == 0
+
+            if missing_fields:
+                field_labels = {
+                    "title": "meeting title",
+                    "recipient_email": "valid recipient email",
+                    "start_time": "valid start date and time",
+                    "end_time": "end date and time (after the start time)",
+                }
+                questions = ", ".join(
+                    field_labels[field] for field in missing_fields
+                )
+                parsed["response"] = (
+                    "I have prepared your meeting details. "
+                    f"Please provide or correct: {questions}."
+                )
+
+        elif parsed["intent"] == "email_draft":
+            parsed["invitation"] = None
+            email_data = parsed.get("email")
+
+            if not isinstance(email_data, dict):
+                email_data = {}
+
+            subject = email_data.get("subject", "")
+            if not isinstance(subject, str) or not subject.strip():
+                email_data["subject"] = (
+                    "Project Update"
+                    if "project" in request.message.lower()
+                    else "Message"
+                )
+
+            required_fields = [
+                "recipient_email",
+                "subject",
+                "body",
+            ]
+            missing_fields = []
+
+            for field in required_fields:
+                value = email_data.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    missing_fields.append(field)
+
+            recipient = email_data.get("recipient_email", "")
+            if recipient and not re.fullmatch(
+                r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+                recipient.strip()
+            ):
+                if "recipient_email" not in missing_fields:
+                    missing_fields.append("recipient_email")
+
+            parsed["email"] = email_data
+            parsed["missing_fields"] = missing_fields
+            parsed["ready_for_confirmation"] = len(missing_fields) == 0
+
+            if missing_fields:
+                field_labels = {
+                    "recipient_email": "valid recipient email address",
+                    "subject": "email subject",
+                    "body": "email message",
+                }
+                questions = ", ".join(
+                    field_labels[field] for field in missing_fields
+                )
+                parsed["response"] = (
+                    "I am preparing your email. "
+                    f"Please provide or correct: {questions}."
+                )
+
+        else:
+            parsed["intent"] = "general_chat"
+            parsed["invitation"] = None
+            parsed["email"] = None
+            parsed["missing_fields"] = []
+            parsed["ready_for_confirmation"] = False
 
         return {
             "model": selected_model,
-            "response": response.message.content
+            **parsed
         }
 
     except Exception as e:
@@ -314,6 +605,226 @@ def generate_email(request: EmailGenerateRequest):
 
 class EmailSummarizeRequest(BaseModel):
     email_text: str
+
+
+
+# ==============================
+# AI Email Compose Endpoint
+# ==============================
+
+@app.post("/email/compose")
+def compose_email(request: EmailComposeRequest):
+    prompt_text = request.prompt.strip()
+
+    if not prompt_text:
+        raise HTTPException(status_code=400, detail="Please enter an email instruction.")
+
+    recipient_email = request.recipient_email.strip()
+
+    if not recipient_email:
+        match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", prompt_text)
+        recipient_email = match.group(0) if match else ""
+
+    if not recipient_email:
+        return {
+            "recipient_required": True,
+            "message": "Please provide the recipient email address."
+        }
+
+    if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", recipient_email):
+        raise HTTPException(status_code=400, detail="Invalid recipient email address.")
+
+    try:
+        ai_prompt = f"""
+You are a professional email writing assistant.
+
+Create an email based on this user instruction:
+{prompt_text}
+
+Recipient email: {recipient_email}
+
+Return ONLY valid JSON with exactly these two string fields:
+{{
+  "subject": "A suitable email subject",
+  "body": "The complete email body"
+}}
+
+Do not include Markdown fences or explanations.
+Do not invent facts, dates, promises, or details not provided by the user.
+Use a suitable greeting and professional closing.
+"""
+
+        email_schema = {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string"},
+                "body": {"type": "string"}
+            },
+            "required": ["subject", "body"],
+            "additionalProperties": False
+        }
+
+        response = ollama_client.chat(
+            model=selected_model,
+            messages=[{"role": "user", "content": ai_prompt}],
+            format=email_schema,
+            options={"temperature": 0}
+        )
+
+        raw_result = response.message.content.strip()
+        raw_result = re.sub(r"^```(?:json)?\s*", "", raw_result)
+        raw_result = re.sub(r"\s*```$", "", raw_result)
+
+        try:
+            email_data = json.loads(raw_result)
+        except json.JSONDecodeError:
+            start = raw_result.find("{")
+            end = raw_result.rfind("}")
+            if start == -1 or end <= start:
+                raise ValueError("AI did not return valid email JSON.")
+            email_data = json.loads(raw_result[start:end + 1])
+
+        subject = str(email_data.get("subject", "")).strip()
+        body = str(email_data.get("body", "")).strip()
+
+        if not subject or not body:
+            raise ValueError("AI returned an incomplete email.")
+
+        return {
+            "recipient_email": recipient_email,
+            "subject": subject,
+            "body": body,
+            "model": selected_model
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Email composition failed: {str(e)}"
+        )
+
+
+# ==============================
+# Send Email Endpoint
+# ==============================
+
+@app.post("/email/send")
+def send_email(
+    request: EmailSendRequest,
+    user_id: str = Depends(get_guest_id)
+):
+    recipient_email = request.recipient_email.strip()
+    subject = request.subject.strip()
+    body = request.body.strip()
+
+    if not re.fullmatch(
+        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+        recipient_email
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid recipient email address."
+        )
+
+    if not subject or not body:
+        raise HTTPException(
+            status_code=400,
+            detail="Subject and body are required."
+        )
+
+    try:
+        send_result = send_shared_gmail_email(
+            recipient_email,
+            subject,
+            body
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail="Email could not be sent through the shared Gmail account."
+        )
+
+    conn = None
+    try:
+        conn = sqlite3.connect("email_history.db")
+        conn.execute(
+            """
+            INSERT INTO sent_emails
+            (user_id, recipient_email, subject, body, sent_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                recipient_email,
+                subject,
+                body,
+                datetime.now().isoformat()
+            )
+        )
+        conn.commit()
+        conn.close()
+
+    except Exception:
+        if conn:
+            conn.close()
+
+        return {
+            "success": True,
+            "sender_email": send_result["sender_email"],
+            "message_id": send_result["message_id"],
+            "message": "Email sent successfully, but sent history could not be saved.",
+            "history_saved": False
+        }
+
+    return {
+        "success": True,
+        "sender_email": send_result["sender_email"],
+        "message_id": send_result["message_id"],
+        "message": "Email sent successfully.",
+        "history_saved": True
+    }
+
+
+# ==============================
+# Get Sent Email History
+# ==============================
+
+@app.get("/email/sent")
+def get_sent_emails(
+    user_id: str = Depends(get_guest_id)
+):
+    try:
+        conn = sqlite3.connect("email_history.db")
+        conn.row_factory = sqlite3.Row
+
+        rows = conn.execute(
+            """
+            SELECT id, recipient_email, subject, body, sent_at
+            FROM sent_emails
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 100
+            """,
+            (user_id,)
+        ).fetchall()
+
+        conn.close()
+
+        return {
+            "total": len(rows),
+            "emails": [dict(row) for row in rows]
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not retrieve sent emails: {str(e)}"
+        )
+
 
 
 @app.post("/email/summarize")
@@ -417,89 +928,129 @@ def generate_email_reply(request: EmailReplyRequest):
 @app.post("/calendar/send-public-invitation")
 def send_public_calendar_invitation(
     request: CalendarInvitationRequest,
-    user_id: str = Depends(get_guest_id)
+    guest_id: str = Depends(get_guest_id)
 ):
-    import re
-
-    sender_email = request.sender_email.strip()
     recipient_email = request.recipient_email.strip()
 
-    email_pattern = r"[^\s@]+@[^\s@]+\.[^\s@]+"
-
-    if not re.fullmatch(email_pattern, sender_email):
-        raise HTTPException(status_code=400, detail="Invalid sender email address")
+    email_pattern = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 
     if not re.fullmatch(email_pattern, recipient_email):
-        raise HTTPException(status_code=400, detail="Invalid recipient email address")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid recipient email address."
+        )
+
+    if not request.title.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Event title is required."
+        )
 
     if request.start_time >= request.end_time:
         raise HTTPException(
             status_code=400,
-            detail="End time must be after start time"
+            detail="End time must be after start time."
         )
-
-    conn = None
 
     try:
-        ics_content = create_ics_file(
-            request.title,
-            request.description,
-            request.start_time,
-            request.end_time,
-            request.location,
-            recipient_email,
-            organizer_email=os.getenv("SMTP_FROM_EMAIL", "")
+        credentials = get_shared_google_credentials()
+
+        calendar_service = build(
+            "calendar",
+            "v3",
+            credentials=credentials,
+            cache_discovery=False
         )
 
-        send_invitation_email(
-            recipient_email,
-            request.title,
-            ics_content,
-            reply_to_email=sender_email
-        )
+        dhaka_timezone = ZoneInfo("Asia/Dhaka")
+
+        start_time = request.start_time
+        end_time = request.end_time
+
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=dhaka_timezone)
+        else:
+            start_time = start_time.astimezone(dhaka_timezone)
+
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=dhaka_timezone)
+        else:
+            end_time = end_time.astimezone(dhaka_timezone)
+
+        event_body = {
+            "summary": request.title.strip(),
+            "description": request.description,
+            "start": {
+                "dateTime": start_time.isoformat(),
+                "timeZone": "Asia/Dhaka"
+            },
+            "end": {
+                "dateTime": end_time.isoformat(),
+                "timeZone": "Asia/Dhaka"
+            },
+            "attendees": [
+                {"email": recipient_email}
+            ]
+        }
+
+        if request.location.strip():
+            event_body["location"] = request.location.strip()
+
+        created_event = calendar_service.events().insert(
+            calendarId="primary",
+            body=event_body,
+            sendUpdates="all"
+        ).execute()
 
         conn = sqlite3.connect("calendar.db")
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            INSERT INTO events
-            (title, description, start_time, end_time, location, user_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                request.title,
-                request.description,
-                request.start_time.isoformat(),
-                request.end_time.isoformat(),
-                request.location,
-                user_id
+        try:
+            conn.execute(
+                """
+                INSERT INTO guest_calendar_invitations (
+                    guest_id, google_event_id, title, description,
+                    start_time, end_time, location, recipient_email,
+                    event_link, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    guest_id,
+                    created_event.get("id"),
+                    request.title.strip(),
+                    request.description,
+                    start_time.isoformat(),
+                    end_time.isoformat(),
+                    request.location.strip(),
+                    recipient_email,
+                    created_event.get("htmlLink"),
+                    datetime.now().isoformat()
+                )
             )
-        )
-
-        event_id = cursor.lastrowid
-        conn.commit()
+            conn.commit()
+        finally:
+            conn.close()
 
         return {
-            "message": "Invitation email sent successfully",
-            "event_id": event_id,
+            "success": True,
+            "message": "Google Calendar invitation sent successfully.",
+            "event_id": created_event.get("id"),
+            "event_link": created_event.get("htmlLink"),
             "recipient_email": recipient_email,
-            "title": request.title
+            "title": created_event.get("summary")
         }
 
     except HTTPException:
         raise
+    except HttpError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Google Calendar could not create the invitation: {error}"
+        )
     except Exception as error:
-        if conn is not None:
-            conn.rollback()
-
         raise HTTPException(
             status_code=500,
-            detail=f"Invitation processing failed: {str(error)}"
+            detail=f"Calendar invitation failed: {str(error)}"
         )
-    finally:
-        if conn is not None:
-            conn.close()
 
 
 @app.post("/calendar/create-event")
@@ -567,40 +1118,81 @@ def create_calendar_event(
 
 @app.get("/calendar/events")
 def get_calendar_events(
-    user_id: str = Depends(get_guest_id)
+    guest_id: str = Depends(get_guest_id)
 ):
+    conn = None
 
     try:
         conn = sqlite3.connect("calendar.db")
         conn.row_factory = sqlite3.Row
 
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT * FROM events
+        # Fetch only this visitor's locally created events.
+        local_rows = conn.execute(
+            """
+            SELECT id, title, description, start_time, end_time, location
+            FROM events
             WHERE user_id = ?
-            ORDER BY start_time ASC
-        """, (user_id,))
+            """,
+            (guest_id,)
+        ).fetchall()
 
-        rows = cursor.fetchall()
+        events = [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "description": row["description"] or "",
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "location": row["location"] or "",
+                "source": "local"
+            }
+            for row in local_rows
+        ]
 
-        events = [dict(row) for row in rows]
+        # Fetch only Google invitations sent by this visitor.
+        invitation_rows = conn.execute(
+            """
+            SELECT google_event_id, title, description,
+                   start_time, end_time, location,
+                   recipient_email, event_link
+            FROM guest_calendar_invitations
+            WHERE guest_id = ?
+            """,
+            (guest_id,)
+        ).fetchall()
 
-        conn.close()
+        events.extend([
+            {
+                "id": row["google_event_id"],
+                "title": row["title"],
+                "description": row["description"] or "",
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "location": row["location"] or "",
+                "recipient_email": row["recipient_email"],
+                "event_link": row["event_link"],
+                "source": "google_invitation"
+            }
+            for row in invitation_rows
+        ])
+
+        events.sort(key=lambda event: event["start_time"])
 
         return {
             "total_events": len(events),
             "events": events
         }
 
-    except Exception as e:
+    except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not retrieve calendar events: {str(e)}"
+            detail=f"Could not retrieve visitor calendar events: {str(error)}"
         )
+    finally:
+        if conn:
+            conn.close()
 
 
-# ==============================
 # AI Suggest Meeting Time
 # ==============================
 
