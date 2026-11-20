@@ -142,6 +142,7 @@ function OllamaAI() {
         {
           role: "assistant",
           content: response.data.response,
+          sources: response.data.sources || [],
           intent: response.data.intent,
           invitation: response.data.invitation,
           email: response.data.email,
@@ -451,6 +452,25 @@ function OllamaAI() {
                       {message.content}
                     </ReactMarkdown>
                   </div>
+
+                  {message.sources?.length > 0 && (
+                    <div className="ollama-sources">
+                      <strong>Sources</strong>
+                      <ul>
+                        {message.sources.map((source, sourceIndex) => (
+                          <li key={`${source.url}-${sourceIndex}`}>
+                            <a
+                              href={source.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {source.title || source.url}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
                   {message.intent === "calendar_invitation" &&
                     message.invitation && (
