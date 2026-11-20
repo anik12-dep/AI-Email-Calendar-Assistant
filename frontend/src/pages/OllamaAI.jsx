@@ -530,15 +530,6 @@ function OllamaAI() {
                         )}
                       </div>
                     )}
-                  {message.role === "assistant" && (
-                    <pre style={{ fontSize: "12px", color: "#16a34a", whiteSpace: "pre-wrap" }}>
-                      {JSON.stringify({
-                        intent: message.intent,
-                        email: message.email,
-                        ready_for_confirmation: message.ready_for_confirmation
-                      }, null, 2)}
-                    </pre>
-                  )}
 
                   {message.intent === "email_draft" && message.email && (
                     <div className="ollama-invitation-card ollama-email-card">

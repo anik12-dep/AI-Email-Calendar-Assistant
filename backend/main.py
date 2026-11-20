@@ -93,9 +93,10 @@ ollama_client = Client(host="http://localhost:11434")
 
 AVAILABLE_MODELS = [
     "llama3.2",
+    "qwen3.5:4b",
 ]
 
-selected_model = "llama3.2"
+selected_model = "qwen3.5:4b"
 
 
 # ==============================
@@ -268,12 +269,14 @@ def update_model(request: ModelRequest):
     try:
         installed_models = ollama_client.list()
 
-        installed_names = [
-            model.model.split(":")[0]
-            for model in installed_models.models
-        ]
+        installed_names = [model.model for model in installed_models.models]
 
-        if request.model not in installed_names:
+        is_installed = any(
+            name == request.model or name.split(":")[0] == request.model
+            for name in installed_names
+        )
+
+        if not is_installed:
             raise HTTPException(
                 status_code=400,
                 detail=f"{request.model} is not installed in Ollama"
@@ -343,22 +346,89 @@ For email_draft, use:
   "body": ""
 }}
 
-Rules:
-1. For ordinary conversation, use general_chat.
-2. For meeting or event scheduling, use calendar_invitation.
-3. For writing or sending an ordinary email, use email_draft.
-4. Extract information from the current message AND conversation history.
-5. Never invent recipient email addresses or factual details.
-6. Calendar required fields: title, recipient_email, start_time, end_time.
-7. Email required fields: recipient_email, subject, body.
-8. If email subject or body is not provided, prepare a suitable professional draft using the user's instruction. Do not invent facts.
-9. If recipient email is missing, ask the user for it.
-10. If required information is missing, list its field names in missing_fields.
-11. For calendar dates, use ISO 8601 with +06:00 timezone.
-12. If calendar end time is missing, ask the user. Never invent duration.
-13. Never send an email or create a calendar event yourself.
-14. Set ready_for_confirmation true only when all required fields are valid.
-15. Keep responses friendly, concise, and conversational.
+GENERAL CHAT RESPONSE QUALITY RULES:
+
+1. Answer the user's actual question directly, completely, and accurately.
+
+2. PROGRAMMING AND CODE GENERATION:
+   - When the user requests a program or code, provide complete,
+     syntactically correct, runnable code in one response.
+   - Put the complete code in ONE appropriate Markdown code block.
+   - Never provide an introductory message instead of the requested code.
+   - Never duplicate the same code or restart the solution unnecessarily.
+   - Include all required imports, classes, functions, and the main execution
+     section when needed.
+   - Check indentation, variable names, function calls, brackets, and syntax
+     for consistency before responding.
+   - Do not leave placeholders, unfinished functions, or comments such as
+     "continue the code here" unless the user explicitly requests a template.
+   - Do not claim that code was executed or tested unless it actually was.
+   - If the requested application is too large for one response, provide a
+     complete, runnable minimal version first and clearly explain its scope.
+
+3. CODE EXPLANATION:
+   - After the code, explain the important parts step by step.
+   - Use simple, beginner-friendly language when appropriate.
+   - Include a realistic sample input and sample output when useful.
+   - Clearly distinguish expected output from output actually tested.
+
+4. WEBSITE AND PROJECT DEVELOPMENT:
+   - Give practical, ordered implementation steps.
+   - Recommend a simple and suitable technology stack.
+   - Avoid unnecessary technologies and complexity.
+   - Use correct HTTP methods and standard development practices.
+   - Do not invent payment providers, APIs, services, statistics, prices,
+     adoption rates, timelines, or other factual claims.
+   - If a fact is uncertain or requires verification, say so clearly.
+
+5. LEARNING AND GENERAL QUESTIONS:
+   - Explain concepts clearly with relevant examples.
+   - Define technical terms in beginner-friendly language when appropriate.
+   - Use headings, lists, tables, and examples when they improve readability.
+
+6. RESPONSE QUALITY:
+   - Match the response length to the complexity of the request.
+   - Avoid unnecessary repetition and duplicate explanations.
+   - Do not stop after an introductory sentence when a complete answer is
+     requested.
+   - If essential information is missing, ask one relevant clarification
+     question instead of making assumptions.
+   - Keep Markdown formatting valid and code blocks properly closed.
+
+7. Do not generate an email or calendar preview for a general_chat request.
+8. Never fabricate facts, results, execution claims, or completed actions.
+
+STRICT INTENT CLASSIFICATION RULES:
+
+1. Default intent is general_chat. When uncertain, ALWAYS choose general_chat.
+2. Use general_chat for questions, explanations, greetings, advice, learning,
+   programming, coding, C/C++/Python/Java, website development, business ideas,
+   debugging, writing code, creating project structures, and general conversation.
+3. A request to create code, a program, a website, a document, or a project
+   structure is NOT an email request.
+4. Use email_draft ONLY when the user explicitly asks to write, draft, compose,
+   prepare, or send an EMAIL.
+5. Words such as "create", "write", "make", "start", or "structure" alone
+   do NOT indicate an email request.
+6. Never classify programming questions or website-building requests as email_draft.
+7. Use calendar_invitation ONLY when the user explicitly asks to schedule,
+   arrange, book, or create a meeting, appointment, or calendar event.
+8. Do not infer an email or calendar action from unrelated conversation history.
+   Use history only to understand follow-up details for an already established task.
+9. Extract information from the current message AND relevant conversation history.
+10. Never invent recipient email addresses or factual details.
+11. Calendar required fields: title, recipient_email, start_time, end_time.
+12. Email required fields: recipient_email, subject, body.
+13. If email subject or body is not provided, prepare a suitable professional
+    draft using the user's instruction. Do not invent facts.
+14. If recipient email is missing, ask the user for it.
+15. If required information is missing, list its field names in missing_fields.
+16. For calendar dates, use ISO 8601 with +06:00 timezone.
+17. If calendar end time is missing, ask the user. Never invent duration.
+18. Never send an email or create a calendar event yourself.
+19. Set ready_for_confirmation true only when all required fields are valid.
+20. Keep responses friendly, helpful, and conversational. For general_chat,
+    answer the user's actual question directly and do not create an email draft.
 """
 
         conversation = [{"role": "system", "content": system_prompt}]
@@ -381,8 +451,13 @@ Rules:
         result = ollama_client.chat(
             model=selected_model,
             messages=conversation,
-            format="json"
+            format="json",
+            options={
+                "temperature": 0.2,
+                "num_predict": 4096
+            }
         )
+
 
         try:
             parsed = json.loads(result.message.content)
@@ -543,6 +618,67 @@ Rules:
             parsed["email"] = None
             parsed["missing_fields"] = []
             parsed["ready_for_confirmation"] = False
+
+        if parsed["intent"] == "general_chat":
+            general_messages = [
+                {
+                    "role": "system",
+                    "content": """
+You are a helpful AI assistant for general questions,
+learning, programming, and website development.
+
+IMPORTANT RESPONSE RULES:
+
+1. Answer the user's actual request directly.
+2. For programming requests, provide complete runnable code.
+3. Put the complete solution in one properly formatted Markdown code block.
+4. Never respond with only an introduction or promise to provide code.
+5. Never duplicate code or leave unfinished functions.
+6. Include necessary imports, classes, functions, and execution code.
+7. Check code consistency, indentation, variable names, and syntax mentally.
+8. After code, provide a clear step-by-step explanation.
+9. Include sample input and expected output when appropriate.
+10. Use beginner-friendly explanations when appropriate.
+11. For website development, give practical steps and avoid fabricated facts.
+12. Never claim code was executed or tested unless it actually was.
+13. Do not generate email drafts or calendar invitations.
+14. Do not return JSON. Return the actual answer as plain text
+    with valid Markdown formatting.
+15. Do not say "I'll create", "Here is what I will do", or similar
+    introductory promises instead of completing the requested task.
+16. Finish the requested answer in this response.
+"""
+                }
+            ]
+
+            for item in request.history[-12:]:
+                role = item.get("role")
+                message_content = item.get("content")
+
+                if role in ("user", "assistant") and isinstance(message_content, str):
+                    general_messages.append({
+                        "role": role,
+                        "content": message_content[:4000]
+                    })
+
+            general_messages.append({
+                "role": "user",
+                "content": request.message
+            })
+
+            general_result = ollama_client.chat(
+                model=selected_model,
+                messages=general_messages,
+                options={
+                    "temperature": 0.2,
+                    "num_predict": 4096
+                }
+            )
+
+            general_answer = general_result.message.content.strip()
+
+            if general_answer:
+                parsed["response"] = general_answer
 
         return {
             "model": selected_model,
