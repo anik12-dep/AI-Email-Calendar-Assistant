@@ -3,7 +3,7 @@ import re
 import json
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
@@ -361,6 +361,7 @@ For calendar_invitation, use:
   "recipient_email": "",
   "start_time": "",
   "end_time": "",
+  "duration_minutes": null,
   "description": "",
   "location": ""
 }}
@@ -452,7 +453,15 @@ STRICT INTENT CLASSIFICATION RULES:
 14. If recipient email is missing, ask the user for it.
 15. If required information is missing, list its field names in missing_fields.
 16. For calendar dates, use ISO 8601 with +06:00 timezone.
-17. If calendar end time is missing, ask the user. Never invent duration.
+17. Understand meeting durations expressed in natural language,
+    including minutes and hours, in English or Bangla.
+18. Extract the duration as a positive integer in minutes in
+    invitation.duration_minutes.
+19. If start_time and duration_minutes are available but end_time is
+    missing, Python will calculate end_time. Do not ask for end_time.
+20. If both end_time and duration_minutes are missing, ask the user
+    for the meeting duration or end time.
+21. Never invent a duration or recipient email address.
 18. Never send an email or create a calendar event yourself.
 19. Set ready_for_confirmation true only when all required fields are valid.
 20. Keep responses friendly, helpful, and conversational. For general_chat,
@@ -509,6 +518,36 @@ STRICT INTENT CLASSIFICATION RULES:
 
             if not isinstance(invitation, dict):
                 invitation = {}
+
+            # Calculate end time automatically from start time + duration.
+            if not invitation.get("end_time"):
+                raw_duration = invitation.get("duration_minutes")
+
+                try:
+                    start_for_duration = datetime.fromisoformat(
+                        invitation["start_time"]
+                    )
+
+                    if isinstance(raw_duration, bool):
+                        raise ValueError("Invalid duration")
+
+                    if isinstance(raw_duration, str):
+                        raw_duration = raw_duration.strip()
+
+                    duration_minutes = int(raw_duration)
+
+                    if duration_minutes <= 0:
+                        raise ValueError("Duration must be positive")
+
+                    calculated_end_time = (
+                        start_for_duration
+                        + timedelta(minutes=duration_minutes)
+                    )
+
+                    invitation["end_time"] = calculated_end_time.isoformat()
+
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    pass
 
             required_fields = [
                 "title",
@@ -577,7 +616,7 @@ STRICT INTENT CLASSIFICATION RULES:
                     "title": "meeting title",
                     "recipient_email": "valid recipient email",
                     "start_time": "valid start date and time",
-                    "end_time": "end date and time (after the start time)",
+                    "end_time": "meeting duration or end date and time (after the start time)",
                 }
                 questions = ", ".join(
                     field_labels[field] for field in missing_fields
